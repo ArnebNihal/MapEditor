@@ -12,6 +12,7 @@ using DaggerfallConnect.Utility;
 using UnityEditor.Localization.Plugins.XLIFF.V12;
 using Unity.Mathematics.Editor;
 using DaggerfallWorkshop.Game.Items;
+using DaggerfallWorkshop.Game.Player;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game.UserInterfaceWindows;
 using Microsoft.Unity.VisualStudio.Editor;
@@ -19,8 +20,8 @@ using UnityEditor.Build.Pipeline.Tasks;
 using UnityEngine.EventSystems;
 using Newtonsoft.Json;
 using System.Linq;
-using Unity.PlasticSCM.Editor.UI;
-using DaggerfallWorkshop.Utility;
+using System.Text;
+using DaggerfallWorkshop.Game.Player;
 
 namespace MapEditor
 {
@@ -47,18 +48,26 @@ namespace MapEditor
         static bool climate = false;
         static bool politics = false;
         static bool locations = false;
-        static bool mapImage = true;
-        static bool grid = false;
+        static bool mapImage = false;
+        static bool drawHeightmap = false;
+        static bool drawClimate = false;
+        static bool drawPolitics = false;
+        public static int drawnBufferCount;
+        public static List<(int, int)> drawnBuffer;
+        public static int colourIndex;
+        public static Color32 paintBrush;
 
         //Rects and Rect constants
         static Rect mapView;
-        static Rect heightmapRect;
+        static Rect heightmapView = new Rect(0, 0, heightmapWidth, heightmapHeight);
+        static Rect heightmapRect = new Rect(-500, -500 , heightmapWidth, heightmapHeight);
+        static Rect mapRect;
         static Rect townBlocksRect;
         const int heightmapOriginX = 0;
         const int heightmapOriginY = 0;
-        const int heightmapRectWidth = MapsFile.WorldWidth;
-        const int heightmapRectHeight = MapsFile.WorldHeight;
-        const float setMovement = 0.01f;
+        static int heightmapRectWidth = WorldInfo.WorldSetting.WorldWidth;
+        static int heightmapRectHeight = WorldInfo.WorldSetting.WorldHeight;
+        const float setMovement = 0.02f;
         const float dataField = 600.0f;
         const float dataFieldBig = 1000.0f;
         const float dataFieldSmall = 200.0f;
@@ -74,15 +83,19 @@ namespace MapEditor
         static Rect layerPosition = new Rect(-500, -500, 1, 1);
         Texture2D referenceMap;
         Texture2D heightMap;
+        byte[] heightmapByteArray;
         Texture2D locationsMap;
         Texture2D climateMap;
         Texture2D politicMap;
+        public static byte topValue;
+        public static byte bottomValue;
         static GUIStyle guiStyle = new GUIStyle();
         static float zoomLevel = 1.0f;
 
         // mapReference constants
         const int mapReferenceWidth = 3440;
         const int mapReferenceHeight = 2400;
+        public const int heightmapWidth = 5120, heightmapHeight = 5120;
         const int mapReferenceMCD = 80;
         const int mapRefWidthUnit = mapReferenceWidth / mapReferenceMCD;
         const int mapRefHeightUnit = mapReferenceHeight / mapReferenceMCD;
@@ -103,6 +116,7 @@ namespace MapEditor
         public bool dungeonContent = false;
         public bool buildingList = false;
         public bool blockList = false;
+        public bool dungeonModified = false;
         public bool widthModified = false;
         public bool heightModified = false;
         public int width = 0;
@@ -110,6 +124,7 @@ namespace MapEditor
         public Vector2 buildingScroll;
         public Vector2 townBlocksScroll;
         public Vector2 dungeonScroll;
+        public Vector2 blockScroll;
         public string[] regionNames;
         public string[] climateNames;
         public static readonly string[] locationTypes = {
@@ -124,8 +139,23 @@ namespace MapEditor
             "Alchemist", "House for Sale", "Armorer", "Bank", "Town4", "Bookseller", "Clothing Store", "Furniture Store", "Gem Store", "General Store", "Library", "Guild Hall", "Pawn Shop", "Weapon Smith", "Temple", "Tavern", "Palace", "House1", "House2", "House3", "House4", "House5", "House6"
         };
 
-        BlocksFile blockFileReader;
+        public readonly string[] rmbBlockPrefixes = {
+            "TVRN", "GENR", "RESI", "WEAP", "ARMR", "ALCH", "BANK", "BOOK",
+            "CLOT", "FURN", "GEMS", "LIBR", "PAWN", "TEMP", "TEMP", "PALA",
+            "FARM", "DUNG", "CAST", "MANR", "SHRI", "RUIN", "SHCK", "GRVE",
+            "FILL", "KRAV", "KDRA", "KOWL", "KMOO", "KCAN", "KFLA", "KHOR",
+            "KROS", "KWHE", "KSCA", "KHAW", "MAGE", "THIE", "DARK", "FIGH",
+            "CUST", "WALL", "MARK", "SHIP", "WITC"
+        };
+
+        private readonly string[] rdbBlockLetters = { "N", "W", "L", "S", "B", "M" };
+
+        private readonly string[] elevationIndex = { "-1", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "+" };
+
+        public static BlocksFile blockFileReader;
         public string[] RMBBlocks;
+        public string[] RDBBlocks;
+        // public string[] RMBBlocksByPrefix;
 
         public string[] townBlocks;
 
@@ -133,11 +163,25 @@ namespace MapEditor
         public string sourceFilesPath;
         public const string testPath = "/home/arneb/Games/daggerfall/DaggerfallGameFiles/arena2/Maps/Tamriel/";
         public const string arena2Path = "/home/arneb/Games/daggerfall/DaggerfallGameFiles/arena2";
+        public int lastDungeonType = -1;
         public int availableBlocks = 0;
+        public int availableDBlocks = 0;
+        public int lastAvailable = -1;
+        public int availablePrefixes = 0;
+        public int lastAvailableLetter = -1;
+        public int availableLetters = 0;
         public int selectedX = 0;
         public int selectedY = 0;
         public int selectedCoordinates = 0;
-        public Dictionary<int,string> modifiedTownBlocks = new Dictionary<int,string>();
+        public int pointedX = 0;
+        public int pointedZ = 0;
+        public (int, int) pointedCoordinates = (0, 0);
+        // public int dungeonMinX = 0;
+        // public int dungeonMaxX = 0;
+        // public int dungeonMinZ = 0;
+        // public int dungeonMaxZ = 0;
+        public List<string> modifiedTownBlocks = new List<string>();
+        public List<Blocks> modifiedDungeonBlocks = new List<Blocks>();
         
         public static void ShowWindow() 
         {
@@ -186,6 +230,9 @@ namespace MapEditor
         {
             guiStyle = SetGUIStyle();
 
+            drawnBuffer = new List<(int, int)>();
+            heightmapByteArray = new byte[0];
+
             SetHeightmapRect();
 
             SetMaps();
@@ -199,8 +246,6 @@ namespace MapEditor
             if (blockFileReader == null)
                 blockFileReader = new BlocksFile(Path.Combine(arena2Path, BlocksFile.Filename), FileUsage.UseMemory, true);
 
-            RMBBlocks = SetRMBBlocks();
-
             pixelData = new PixelData();
             modifiedPixelData = new PixelData();
 
@@ -209,10 +254,13 @@ namespace MapEditor
             referenceMap = new Texture2D(referenceMap.width, referenceMap.height, TextureFormat.ARGB32, false, true);
             ImageConversion.LoadImage(referenceMap, File.ReadAllBytes(path));
             layerPosition = new Rect(layerOriginX, layerOriginY, startingWidth, startingHeight);
+            heightmapRect = new Rect(layerOriginX, layerOriginY, startingWidth, startingHeight);
         }
 
         void OnGUI()
         {
+            drawnBufferCount = drawnBuffer.Count;
+
             GUILayout.Label("Base Settings", EditorStyles.boldLabel);
 
             EditorGUILayout.BeginHorizontal();
@@ -222,10 +270,26 @@ namespace MapEditor
                 OpenRegionManager();
             }
 
-            if (GUILayout.Button("Open Block Inspector", GUILayout.MaxWidth(dataFieldSmall)))
+            if (GUILayout.Button("Open Faction Manager", GUILayout.MaxWidth(dataFieldSmall)))
             {
-                OpenBlockInspector();
+                OpenFactionManager();
             }
+
+            if (GUILayout.Button("Create Large Heightmap", GUILayout.MaxWidth(dataFieldSmall)))
+            {
+                CreateLargeHeightmap();
+            }
+
+            if (GUILayout.Button("Create Large Climatemap", GUILayout.MaxWidth(dataFieldSmall)))
+            {
+                CreateLargeClimatemap();
+            }
+
+            if (GUILayout.Button("Create WorldSettings", GUILayout.MaxWidth(dataFieldSmall)))
+            {
+                CreateWorldSettings();
+            }
+
             EditorGUILayout.EndHorizontal();
             // if (GUILayout.Button("Set as current world", GUILayout.MaxWidth(200)))
             // {
@@ -242,8 +306,8 @@ namespace MapEditor
             mapImage = EditorGUILayout.ToggleLeft("Map Reference", mapImage);
             EditorGUILayout.EndHorizontal();
 
-            r = EditorGUILayout.BeginHorizontal(GUILayout.Height(MapsFile.WorldHeight / 4 * 3));
-            mapView = EditorGUILayout.GetControlRect(false, 0.0f, GUILayout.Width(MapsFile.WorldWidth / 4 * 3), GUILayout.Height(MapsFile.WorldHeight / 4 * 3));
+            r = EditorGUILayout.BeginHorizontal(GUILayout.Height(WorldInfo.WorldSetting.WorldHeight / 40 * 3));
+            mapView = EditorGUILayout.GetControlRect(false, 0.0f, GUILayout.Width(WorldInfo.WorldSetting.WorldWidth / 40 * 3), GUILayout.Height(WorldInfo.WorldSetting.WorldHeight / 40 * 3));
             mapView.x += 5.0f;
 
             if (mapImage)
@@ -253,27 +317,37 @@ namespace MapEditor
 
             if (heightmap)
             {
-                Graphics.DrawTexture(mapView, heightMap, heightmapRect, 0, 0, 0, 0);
+                Graphics.DrawTexture(mapView, heightMap, mapRect, 0, 0, 0, 0);
             }
 
             if (climate)
             {
-                Graphics.DrawTexture(mapView, climateMap, heightmapRect, 0, 0, 0, 0);
+                Graphics.DrawTexture(mapView, climateMap, mapRect, 0, 0, 0, 0);
             }
 
             if (politics)
             {
-                Graphics.DrawTexture(mapView, politicMap, heightmapRect, 0, 0, 0, 0);
+                Graphics.DrawTexture(mapView, politicMap, mapRect, 0, 0, 0, 0);
             }
 
             if (locations)
             {
-                Graphics.DrawTexture(mapView, locationsMap, heightmapRect, 0, 0, 0, 0);
+                Graphics.DrawTexture(mapView, locationsMap, mapRect, 0, 0, 0, 0);
             }
 
-            if (grid)
+            if (drawHeightmap)
             {
 
+            }
+
+            if (drawClimate)
+            {
+                
+            }
+
+            if (drawPolitics)
+            {
+                
             }
 
             if (mousePosition == null)
@@ -312,9 +386,12 @@ namespace MapEditor
 
                 EditorGUILayout.LabelField("Elevation: ", pixelData.Elevation.ToString());
 
-                if (pixelData.Region == 64)
+                if (pixelData.Region == -1)
                     EditorGUILayout.LabelField("Region: ", "Water body");
-                else EditorGUILayout.LabelField("Region: ", regionNames[pixelData.Region]);
+                else 
+                {
+                    EditorGUILayout.LabelField("Region: ", regionNames[pixelData.Region]);
+                }
                 
                 EditorGUILayout.LabelField("Climate: ", climateNames[pixelData.Climate]);
             }
@@ -327,22 +404,192 @@ namespace MapEditor
                 if (modifiedPixelData.hasLocation)
                 {
                     modifiedPixelData.Name = EditorGUILayout.TextField("Location Name: ", modifiedPixelData.Name, GUILayout.MaxWidth(dataField));
+                    if (modifiedPixelData.RegionName == "")
+                        modifiedPixelData.RegionName = WorldInfo.WorldSetting.RegionNames[modifiedPixelData.Region];
+
                     EditorGUILayout.LabelField("Region Name: ", modifiedPixelData.RegionName);
                     EditorGUILayout.LabelField("Map ID: ", modifiedPixelData.MapId.ToString());
                     EditorGUILayout.LabelField("Latitude: ", modifiedPixelData.Latitude.ToString());
                     EditorGUILayout.LabelField("Longitude", modifiedPixelData.Longitude.ToString());
                     modifiedPixelData.LocationType = EditorGUILayout.Popup("Location Type: ", modifiedPixelData.LocationType, locationTypes, GUILayout.MaxWidth(dataField));
                     modifiedPixelData.DungeonType = EditorGUILayout.Popup("Dungeon Type: ", modifiedPixelData.DungeonType, dungeonTypes, GUILayout.MaxWidth(dataField));
+                    if (lastDungeonType != modifiedPixelData.DungeonType)
+                    {
+                        if (modifiedPixelData.DungeonType == 255 || modifiedPixelData.DungeonType >= Enum.GetNames(typeof(DFRegion.DungeonTypes)).Length - 1)
+                            modifiedPixelData.dungeon.BlockCount = 0;
+                        else modifiedPixelData.dungeon = SetNewDungeon();
+
+                        lastDungeonType = modifiedPixelData.DungeonType;
+                    }
                     EditorGUILayout.LabelField("Key: ", modifiedPixelData.Key.ToString());
 
                     exteriorContent = EditorGUILayout.Foldout(exteriorContent, "Exterior Data");
                     if (exteriorContent)
                     {
+                        dungeonContent = false;
                         EditorGUILayout.LabelField("X: ", modifiedPixelData.exterior.X.ToString());
                         EditorGUILayout.LabelField("Y: ", modifiedPixelData.exterior.Y.ToString());
                         EditorGUILayout.LabelField("Location ID: ", modifiedPixelData.exterior.LocationId.ToString());
                         EditorGUILayout.LabelField("Exterior Location ID: ", modifiedPixelData.exterior.ExteriorLocationId.ToString());
+                        modifiedPixelData.exterior.AnotherName = EditorGUILayout.TextField("Another Name: ", modifiedPixelData.exterior.AnotherName);
                         EditorGUILayout.LabelField("Building Count: ", modifiedPixelData.exterior.BuildingCount.ToString());
+
+                        if (!widthModified)
+                        {
+                            width = EditorGUILayout.IntSlider("Width: ", modifiedPixelData.exterior.Width, 1, 8, GUILayout.MaxWidth(dataField));
+                            widthModified = true;
+                        }
+                        width = EditorGUILayout.IntSlider("Width: ", width, 1, 8, GUILayout.MaxWidth(dataField));
+
+                        if (!heightModified)
+                        {
+                            height = EditorGUILayout.IntSlider("Height: ", modifiedPixelData.exterior.Height, 1, 8, GUILayout.MaxWidth(dataField));
+                            heightModified = true;
+                        }
+                        height = EditorGUILayout.IntSlider("Height: ", height, 1, 8, GUILayout.MaxWidth(dataField));
+
+                        modifiedPixelData.exterior.PortTown = EditorGUILayout.Toggle("Port Town", modifiedPixelData.exterior.PortTown);
+
+                        townBlocks = new string[modifiedPixelData.exterior.Width * modifiedPixelData.exterior.Height];
+                        townBlocks = modifiedPixelData.exterior.BlockNames;
+
+                        if (modifiedTownBlocks.Count <= 0)
+                            modifiedTownBlocks = townBlocks.ToList();
+                        
+                        if (modifiedTownBlocks.Count != (width * height))
+                            modifiedTownBlocks = SetListCount(modifiedTownBlocks, width, height);
+
+                        int counter = 0;
+                        int offset = 0;
+                        for (int i = 0; i < (width * height); i++)
+                        {
+                            if (counter >= modifiedPixelData.exterior.Width && width > modifiedPixelData.exterior.Width)
+                            {
+                                // ResetSelectedCoordinates();
+                                counter = width - modifiedPixelData.exterior.Width;
+                                do
+                                {
+                                    if (modifiedTownBlocks[i + offset] == null)
+                                        modifiedTownBlocks[i + offset] = noBlock;
+                                    // if (modifiedTownBlocks.ContainsKey(i + offset))
+                                    //     modifiedTownBlocks.Remove(i + offset);
+                                    // modifiedTownBlocks.Add((i + offset), noBlock);
+                                    counter--;
+                                    offset++;
+                                }
+                                while (counter > 0);
+                            }
+                            counter++;
+
+                            if (i < modifiedPixelData.exterior.BlockNames.Length && modifiedTownBlocks.Count > (i + offset) && modifiedTownBlocks[i + offset] == null)
+                            {
+                                // if (modifiedTownBlocks.Count >= (i + offset))
+                                // {
+                                //     Debug.Log("modifiedTownBlocks contains key " + (i + offset) + " of value " + modifiedTownBlocks[i + offset]);
+                                //     string modTownBlock;
+                                //     modTownBlock = modifiedTownBlocks[i + offset];
+                                //     modifiedTownBlocks.Insert((i + offset), modTownBlock);
+                                // }
+                                // else 
+                                modifiedTownBlocks[i + offset] = modifiedPixelData.exterior.BlockNames[i];
+                            }
+                            else if (modifiedTownBlocks.Count <= (i + offset))
+                                break;
+                            else
+                            {
+                                for (int j = (i + offset); j < modifiedTownBlocks.Count; j++)
+                                {
+                                    if (modifiedTownBlocks[j] == null)
+                                        modifiedTownBlocks[j] = noBlock;
+                                    // if (modifiedTownBlocks.ContainsKey(j))
+                                    //     modifiedTownBlocks.Remove(j);
+                                    // modifiedTownBlocks.Add(j, noBlock);
+                                }
+                                break;
+                            }
+                        }
+
+                        // Debug.Log("townBlocks.Length: " + townBlocks.Length);
+                        // for (int i = 0; i < townBlocks.Length; i++)
+                        // {                
+                        //     if (modifiedTownBlocks.ContainsKey(i))
+                        //         modifiedTownBlocks.Remove(i);     
+                        //     Debug.Log("Adding block " + townBlocks[i]);
+                        //     modifiedTownBlocks. Add(i, townBlocks[i]);
+                        // }
+
+                        EditorGUILayout.LabelField("Block Names: ");
+
+                        townBlocksScroll = EditorGUILayout.BeginScrollView(townBlocksScroll);
+
+                        int column = 0;
+                        int index = 0;
+                        int row = (height - 1);
+
+                        EditorGUILayout.BeginHorizontal(GUILayout.MaxWidth(dataField));
+                        for (int i = 0; i < modifiedTownBlocks.Count; i++)
+                        {
+                            if (i != 0 && (i % width) == 0)
+                            {
+                                EditorGUILayout.EndHorizontal();
+                                row--;
+                                column = 0;
+                                EditorGUILayout.BeginHorizontal(GUILayout.MaxWidth(dataField));
+                            }
+
+                            index = column + (width * row);
+                            if (index == selectedCoordinates)
+                                EditorGUILayout.LabelField(modifiedTownBlocks[index], EditorStyles.whiteBoldLabel);
+                            else EditorGUILayout.LabelField(modifiedTownBlocks[index]);
+                            column++;
+                        }
+
+                        EditorGUILayout.EndHorizontal();
+                        EditorGUILayout.EndScrollView();
+
+                        EditorGUILayout.BeginHorizontal();
+                        availablePrefixes = EditorGUILayout.Popup("Prefix: ", availablePrefixes, rmbBlockPrefixes, GUILayout.MaxWidth(dataField));
+
+                        if (availablePrefixes != lastAvailable)
+                        {
+                            RMBBlocks = SetBlocks(availablePrefixes, true);
+                            lastAvailable = availablePrefixes;
+                        }
+                        
+                        availableBlocks = EditorGUILayout.Popup("RMB: ", availableBlocks, RMBBlocks, GUILayout.MaxWidth(dataField));
+                        EditorGUILayout.EndHorizontal();
+
+                        EditorGUILayout.BeginHorizontal();
+                        selectedX = EditorGUILayout.IntSlider("Set to block X:", selectedX, 1, width, GUILayout.MaxWidth(dataField));
+                        selectedY = EditorGUILayout.IntSlider(" Y:", selectedY, 1, height, GUILayout.MaxWidth(dataField));
+                        selectedCoordinates = (selectedX - 1) + (height - selectedY) * width;
+
+                        if (GUILayout.Button("Set Block", GUILayout.MaxWidth(dataFieldSmall)))
+                        {
+                            // Debug.Log("townBlocks.Length: " + townBlocks.Length);
+                            // modifiedTownBlocks = new Dictionary<int, string>();
+                            // for (int i = 0; i < townBlocks.Length; i++)
+                            // {
+                            //     modifiedTownBlocks.Add(i, townBlocks[i]);
+                            // }
+
+                            modifiedTownBlocks.RemoveAt(selectedCoordinates); 
+                            modifiedTownBlocks.Insert(selectedCoordinates, RMBBlocks[availableBlocks]);
+
+                            // Debug.Log("modifiedTownBlocks.Count: " + modifiedTownBlocks.Count);
+                            // for (int i = 0; i < modifiedTownBlocks.Count; i++)
+                            // {
+                            //     Debug.Log("Working on key n. " + i);
+                            //     if (modifiedTownBlocks.ContainsKey(i))
+                            //         modifiedTownBlocksString.Add(modifiedTownBlocks[i]);
+                            // }
+
+                            modifiedPixelData.exterior.BuildingCount = GetBuildingCount(width, height, modifiedTownBlocks);
+                            modifiedPixelData.exterior.buildings = new Buildings[modifiedPixelData.exterior.BuildingCount];
+                            modifiedPixelData.exterior.buildings = SetBuildings(modifiedPixelData, modifiedTownBlocks);
+                            // townBlocks = modifiedTownBlocksString.ToArray();
+                        }
+                        EditorGUILayout.EndHorizontal();
 
                         if (modifiedPixelData.exterior.BuildingCount > 0)
                         {
@@ -366,108 +613,6 @@ namespace MapEditor
                                 EditorGUILayout.EndScrollView();
                             }
                         }
-
-                        if (!widthModified)
-                        {
-                            width = EditorGUILayout.IntSlider("Width: ", modifiedPixelData.exterior.Width, 1, 8, GUILayout.MaxWidth(dataField));
-                            widthModified = true;
-                        }
-                        width = EditorGUILayout.IntSlider("Width: ", width, 1, 8, GUILayout.MaxWidth(dataField));
-
-                        if (!heightModified)
-                        {
-                            height = EditorGUILayout.IntSlider("Height: ", modifiedPixelData.exterior.Height, 1, 8, GUILayout.MaxWidth(dataField));
-                            heightModified = true;
-                        }
-                        height = EditorGUILayout.IntSlider("Height: ", height, 1, 8, GUILayout.MaxWidth(dataField));
-
-                        modifiedPixelData.exterior.PortTown = EditorGUILayout.Toggle("Port Town", modifiedPixelData.exterior.PortTown);
-
-                        townBlocks = new string[width * height];
-
-                        int counter = 0;
-                        int offset = 0;
-                        for (int i = 0; i < townBlocks.Length; i++)
-                        {
-                            if (counter >= modifiedPixelData.exterior.Width && width > modifiedPixelData.exterior.Width)
-                            {
-                                // ResetSelectedCoordinates();
-                                counter = width - modifiedPixelData.exterior.Width;
-                                do
-                                {
-                                    townBlocks[i + offset] = noBlock;
-                                    counter--;
-                                    offset++;
-                                }
-                                while (counter > 0);
-                            }
-                            counter++;
-
-                            if (i < modifiedPixelData.exterior.BlockNames.Length && townBlocks.Length > (i + offset))
-                            {
-                                if (modifiedTownBlocks.ContainsKey(i + offset))
-                                {
-                                    string modTownBlock;
-                                    modifiedTownBlocks.TryGetValue((i + offset), out modTownBlock);
-                                    townBlocks[i + offset] = modTownBlock;
-                                }
-                                else townBlocks[i + offset] = modifiedPixelData.exterior.BlockNames[i];
-                            }
-                            else if (townBlocks.Length <= (i + offset))
-                                break;
-                            else
-                            {
-                                for (int j = (i + offset); j < townBlocks.Length; j++)
-                                {
-                                    townBlocks[j] = noBlock;
-                                }
-                                break;
-                            }
-                        }
-
-                        EditorGUILayout.LabelField("Block Names: ");
-
-                        townBlocksScroll = EditorGUILayout.BeginScrollView(townBlocksScroll);
-
-                        int column = 0;
-                        int index = 0;
-                        int row = (height - 1);
-
-                        EditorGUILayout.BeginHorizontal(GUILayout.MaxWidth(dataField));
-                        for (int i = 0; i < townBlocks.Length; i++)
-                        {
-                            if (i != 0 && (i % width) == 0)
-                            {
-                                EditorGUILayout.EndHorizontal();
-                                row--;
-                                column = 0;
-                                EditorGUILayout.BeginHorizontal(GUILayout.MaxWidth(dataField));
-                            }
-
-                            index = column + (width * row);
-                            if (index == selectedCoordinates)
-                                EditorGUILayout.LabelField(townBlocks[index], EditorStyles.whiteBoldLabel);
-                            else EditorGUILayout.LabelField(townBlocks[index]);
-                            column++;
-                        }
-
-                        EditorGUILayout.EndHorizontal();
-                        EditorGUILayout.EndScrollView();
-
-                        EditorGUILayout.BeginHorizontal();
-                        availableBlocks = EditorGUILayout.Popup("RMB: ", availableBlocks, RMBBlocks, GUILayout.MaxWidth(dataField));
-                        selectedX = EditorGUILayout.IntSlider("Set to block X:", selectedX, 1, width, GUILayout.MaxWidth(dataField));
-                        selectedY = EditorGUILayout.IntSlider(" Y:", selectedY, 1, height, GUILayout.MaxWidth(dataField));
-                        selectedCoordinates = (selectedX - 1) + (height - selectedY) * width;
-
-                        if (GUILayout.Button("Set Block", GUILayout.MaxWidth(dataFieldSmall)))
-                        {
-                            if (modifiedTownBlocks.ContainsKey(selectedCoordinates))
-                                modifiedTownBlocks.Remove(selectedCoordinates);
-
-                            modifiedTownBlocks.Add(selectedCoordinates, RMBBlocks[availableBlocks]);
-                        }
-                        EditorGUILayout.EndHorizontal();
                     }
 
                     if (modifiedPixelData.dungeon.BlockCount > 0)
@@ -475,24 +620,31 @@ namespace MapEditor
                         dungeonContent = EditorGUILayout.Foldout(dungeonContent, "DungeonData");
                         if (dungeonContent)
                         {
+                            exteriorContent = false;
+                            modifiedPixelData.dungeon.DungeonName = EditorGUILayout.TextField("Dungeon Name: ", modifiedPixelData.dungeon.DungeonName);
                             EditorGUILayout.LabelField("X: ", modifiedPixelData.dungeon.X.ToString());
                             EditorGUILayout.LabelField("Y: ", modifiedPixelData.dungeon.Y.ToString());
                             EditorGUILayout.LabelField("Location ID: ", modifiedPixelData.dungeon.LocationId.ToString());
                             EditorGUILayout.LabelField("Block Count: ", modifiedPixelData.dungeon.BlockCount.ToString());
 
+                            if (modifiedDungeonBlocks.Count <= 0)
+                                modifiedDungeonBlocks = modifiedPixelData.dungeon.blocks.ToList();
+
+                            modifiedPixelData.dungeon.BlockCount = modifiedDungeonBlocks.Count;
+                            modifiedPixelData.dungeon.blocks = modifiedDungeonBlocks.ToArray();
 
                             (int, int) x = (0, 0);
                             (int, int) z = (0, 0);
-                            for (int block = 0; block < modifiedPixelData.dungeon.BlockCount; block++)
+                            foreach (Blocks blockElement in modifiedDungeonBlocks)
                             {
-                                if (modifiedPixelData.dungeon.blocks[block].X < x.Item1)
-                                    x.Item1 = modifiedPixelData.dungeon.blocks[block].X;
-                                if (modifiedPixelData.dungeon.blocks[block].X > x.Item2)
-                                    x.Item2 = modifiedPixelData.dungeon.blocks[block].X;
-                                if (modifiedPixelData.dungeon.blocks[block].Z < z.Item1)
-                                    z.Item1 = modifiedPixelData.dungeon.blocks[block].Z;
-                                if (modifiedPixelData.dungeon.blocks[block].Z > z.Item2)
-                                    z.Item2 = modifiedPixelData.dungeon.blocks[block].Z;
+                                if (blockElement.X < x.Item1)
+                                    x.Item1 = blockElement.X;
+                                if (blockElement.X > x.Item2)
+                                    x.Item2 = blockElement.X;
+                                if (blockElement.Z < z.Item1)
+                                    z.Item1 = blockElement.Z;
+                                if (blockElement.Z > z.Item2)
+                                    z.Item2 = blockElement.Z;
                             }
                             EditorGUILayout.LabelField("Block Names: ");
 
@@ -503,13 +655,66 @@ namespace MapEditor
                             {
                                 for (int X = x.Item1; X <= x.Item2; X++)
                                 {
+                                    Blocks currentBlock = new Blocks();
+                                    bool[] border = {false, false, false, false}; //0: top, 1: bottom, 2: left, 3: right
+                                    if (Z == z.Item1 || !(modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X , Z - 1))))
+                                        border[0] = true;
+                                    else if (Z == z.Item2 || !(modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X, Z + 1))))
+                                        border[1] = true;
+                                    
+                                    if (X == x.Item1 || !(modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X - 1, Z))))
+                                        border[2] = true;
+                                    else if (X == x.Item2|| !(modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X + 1, Z))))
+                                        border[3] = true;
+                                    
                                     bool found = false;
-                                    for (int block = 0; block < modifiedPixelData.dungeon.BlockCount; block++)
+                                    for (int block = 0; block < modifiedDungeonBlocks.Count; block++)
                                     {
-                                        if (modifiedPixelData.dungeon.blocks[block].X == X && modifiedPixelData.dungeon.blocks[block].Z == Z)
+                                        if (modifiedDungeonBlocks[block].X == X && modifiedDungeonBlocks[block].Z == Z)
                                         {
-                                            EditorGUILayout.LabelField(modifiedPixelData.dungeon.blocks[block].BlockName);
+                                            currentBlock = modifiedDungeonBlocks[block];
+                                            if (pointedCoordinates == (X, Z))
+                                                EditorGUILayout.LabelField(currentBlock.BlockName, EditorStyles.whiteBoldLabel);
+                                            else EditorGUILayout.LabelField(currentBlock.BlockName);
+
                                             found = true;
+                                        }
+                                    }
+
+                                    if (found && currentBlock.BlockName.StartsWith("B"))
+                                    {
+                                        char initial = 'B';
+                                        if ((modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z, blk.BlockName[0]) == (X, Z - 1, initial)) || !modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X, Z - 1))) &&
+                                            (modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z, blk.BlockName[0]) == (X, Z + 1, initial)) || !modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X, Z + 1))) &&
+                                            (modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z, blk.BlockName[0]) == (X - 1, Z, initial)) || !modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X - 1, Z))) &&
+                                            (modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z, blk.BlockName[0]) == (X + 1, Z, initial)) || !modifiedDungeonBlocks.Exists(blk => (blk.X, blk.Z) == (X + 1, Z))))
+                                            modifiedDungeonBlocks.Remove(currentBlock);
+                                    }
+
+                                    if (found && !currentBlock.BlockName.StartsWith("B"))
+                                    {
+                                        if (border[0])
+                                        {
+                                            modifiedDungeonBlocks.Add(RandomBorderBlock(Z - 1, X));
+                                            // modifiedPixelData.dungeon.BlockCount++;
+                                        }
+
+                                        if (border[1])
+                                        {
+                                            modifiedDungeonBlocks.Add(RandomBorderBlock(Z + 1, X));
+                                            // modifiedPixelData.dungeon.BlockCount++;
+                                        }
+
+                                        if (border[2])
+                                        {
+                                            modifiedDungeonBlocks.Add(RandomBorderBlock(Z, X - 1));
+                                            // modifiedPixelData.dungeon.BlockCount++;
+                                        }
+
+                                        if (border[3])
+                                        {
+                                            modifiedDungeonBlocks.Add(RandomBorderBlock(Z, X + 1));
+                                            // modifiedPixelData.dungeon.BlockCount++;
                                         }
                                     }
 
@@ -525,6 +730,62 @@ namespace MapEditor
                             }
                             EditorGUILayout.EndHorizontal();
                             EditorGUILayout.EndScrollView();
+
+                            EditorGUILayout.BeginHorizontal();
+                            availableLetters = EditorGUILayout.Popup("Letter: ", availableLetters, rdbBlockLetters, GUILayout.MaxWidth(dataField));
+
+                            if (availableLetters != lastAvailableLetter)
+                            {
+                                RDBBlocks = SetBlocks(availableLetters, false);
+                                lastAvailableLetter = availableLetters;
+                            }
+
+                            availableDBlocks = EditorGUILayout.Popup("RDB: ", availableDBlocks, RDBBlocks, GUILayout.MaxWidth(dataField));
+                            EditorGUILayout.EndHorizontal();
+
+                            EditorGUILayout.BeginHorizontal();
+                            pointedX = EditorGUILayout.IntSlider("Set to block X:", pointedX, x.Item1, x.Item2, GUILayout.MaxWidth(dataField));
+                            pointedZ = EditorGUILayout.IntSlider(" Z:", pointedZ, z.Item1, z.Item2, GUILayout.MaxWidth(dataField));
+                            pointedCoordinates = (pointedX, pointedZ);
+
+                            if (GUILayout.Button("Set Block", GUILayout.MaxWidth(dataFieldSmall)))
+                            {
+                                int blockIndex = GetDBlockIndex();
+                                modifiedDungeonBlocks.RemoveAt(blockIndex);
+                                modifiedDungeonBlocks.Insert(blockIndex, GetDungeonBlockData());
+
+                                modifiedPixelData.dungeon.BlockCount = modifiedDungeonBlocks.Count;
+                                modifiedPixelData.dungeon.blocks = new Blocks[modifiedDungeonBlocks.Count];
+                                modifiedPixelData.dungeon.blocks = modifiedDungeonBlocks.ToArray();
+                            }
+                            EditorGUILayout.EndHorizontal();
+
+                            blockList = EditorGUILayout.Foldout(blockList, "Block List");
+                            if (blockList)
+                            {
+                                blockScroll = EditorGUILayout.BeginScrollView(blockScroll);
+
+                                for (int Z = z.Item1; Z <= z.Item2; Z++)
+                                {
+                                    for (int X = x.Item1; X <= x.Item2; X++)
+                                    {
+                                        for (int block = 0; block < modifiedDungeonBlocks.Count; block++)
+                                        {
+                                            if (modifiedDungeonBlocks[block].X == X && modifiedDungeonBlocks[block].Z == Z)
+                                            {
+                                                EditorGUILayout.LabelField("X: ", (modifiedDungeonBlocks[block].X).ToString());
+                                                EditorGUILayout.LabelField("Z: ", (modifiedDungeonBlocks[block].Z).ToString());
+                                                modifiedDungeonBlocks[block].IsStartingBlock = EditorGUILayout.Toggle("Starting Block: ", modifiedDungeonBlocks[block].IsStartingBlock);
+                                                EditorGUILayout.LabelField("Block Name: ", modifiedDungeonBlocks[block].BlockName);
+                                                modifiedDungeonBlocks[block].WaterLevel = EditorGUILayout.IntField("Water Level: ", modifiedDungeonBlocks[block].WaterLevel);
+                                                modifiedDungeonBlocks[block].CastleBlock = EditorGUILayout.Toggle("Castle Block: ", modifiedDungeonBlocks[block].CastleBlock);
+                                                EditorGUILayout.Space();
+                                            }
+                                        }
+                                    }
+                                }
+                                EditorGUILayout.EndScrollView();
+                            }
                         }
                     }
                 }
@@ -543,13 +804,21 @@ namespace MapEditor
                 EditorGUILayout.BeginHorizontal(GUILayout.Height(30));
                 if (GUILayout.Button("Apply Changes", GUILayout.MaxWidth(100)))
                 {
+                    modifiedPixelData.exterior.Width = width;
+                    modifiedPixelData.exterior.Height = height;
+
+                    modifiedPixelData.exterior.BlockNames = new string[modifiedPixelData.exterior.Width * modifiedPixelData.exterior.Height];
+                    for (int i = 0; i < (modifiedPixelData.exterior.Width * modifiedPixelData.exterior.Height); i++)
+                    {
+                        modifiedPixelData.exterior.BlockNames[i] = modifiedTownBlocks[i];
+                    }
                     ApplyChanges();
                     SetMaps();
                 }
 
                 if (GUILayout.Button("Revert Changes", GUILayout.MaxWidth(100)))
                 {
-                    pixelData.GetPixelData((int)pixelCoordinates.x, (int)pixelCoordinates.y);
+                    modifiedPixelData.GetPixelData((int)pixelCoordinates.x, (int)pixelCoordinates.y);
                 }
                 EditorGUILayout.EndHorizontal();
             }
@@ -559,7 +828,137 @@ namespace MapEditor
             EditorGUILayout.EndHorizontal();
 
             r = EditorGUILayout.BeginHorizontal(GUILayout.Height(30));
-            grid = EditorGUILayout.ToggleLeft("Grid", grid);
+
+            EditorGUILayout.BeginVertical();
+            drawHeightmap = EditorGUILayout.ToggleLeft("Draw Heightmap Mode", drawHeightmap);
+            if (drawHeightmap)
+            {                
+                colourIndex = EditorGUILayout.Popup("Elevation: ", colourIndex, elevationIndex, GUILayout.MaxWidth(dataFieldSmall));
+                paintBrush = GetElevationColour(colourIndex - 1);
+
+                if (GUILayout.Button("Apply", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    foreach ((int, int) modifiedElevationPixel in drawnBuffer)
+                    {
+                        int elevation = 0;
+                        if (colourIndex == 0)
+                        {
+                            elevation = UnityEngine.Random.Range(0, 3);
+                        }
+                        else if (colourIndex == 1)
+                        {
+                            elevation = UnityEngine.Random.Range(4, 10);
+                        }
+                        else if (colourIndex == elevationIndex.Length - 1)
+                        {
+                            elevation = UnityEngine.Random.Range((colourIndex - 1) * 10, 256);
+                        }
+                        else
+                            elevation = UnityEngine.Random.Range((colourIndex - 1) * 10, colourIndex * 10);
+
+                        SmallHeightmap.Woods[modifiedElevationPixel.Item1, modifiedElevationPixel.Item2] = (byte)elevation;
+                    }
+                    drawnBuffer = new List<(int, int)>();
+                }
+
+                if (GUILayout.Button("Save Changes", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    string fileDataPath = Path.Combine(testPath, "Woods.json");
+                    var json = JsonConvert.SerializeObject(SmallHeightmap.Woods, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllText(fileDataPath, json);
+                }
+
+                if (GUILayout.Button("Save Image", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    string fileDataPath = Path.Combine(testPath, "Woods.png");
+                    heightmapByteArray = ConvertToGrayscale(SmallHeightmap.Woods);
+                    // var json = JsonConvert.SerializeObject(heightmapByteArray, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllBytes(fileDataPath, heightmapByteArray);
+                }
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.BeginVertical();
+            drawClimate = EditorGUILayout.ToggleLeft("Draw Climate Mode", drawClimate);
+            if (drawClimate)
+            {                
+                colourIndex = EditorGUILayout.Popup("Climate: ", colourIndex, Enum.GetNames(typeof(MapsFile.Climates)), GUILayout.MaxWidth(dataFieldSmall));
+                paintBrush = GetClimateColour(colourIndex + (int)MapsFile.Climates.Ocean);
+
+                if (GUILayout.Button("Apply", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    foreach ((int, int) modifiedClimatePixel in drawnBuffer)
+                    {
+                        ClimateInfo.Climate[modifiedClimatePixel.Item1, modifiedClimatePixel.Item2] = colourIndex;
+                    }
+                    drawnBuffer = new List<(int, int)>();
+                }
+
+                if (GUILayout.Button("Save Changes", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    string fileDataPath = Path.Combine(testPath, "Climate.json");
+                    var json = JsonConvert.SerializeObject(ClimateInfo.Climate, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllText(fileDataPath, json);
+                }
+
+                if (GUILayout.Button("Save Image", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    string fileDataPath = Path.Combine(testPath, "Climate.png");
+                    heightmapByteArray = ConvertToGrayscale(ClimateInfo.Climate);
+                    // var json = JsonConvert.SerializeObject(heightmapByteArray, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllBytes(fileDataPath, heightmapByteArray);
+                }
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.BeginVertical();
+            drawPolitics = EditorGUILayout.ToggleLeft("Draw Politics Mode", drawPolitics);
+            if (drawPolitics)
+            {                
+                colourIndex = EditorGUILayout.Popup("Region: ", colourIndex, WorldInfo.WorldSetting.RegionNames, GUILayout.MaxWidth(dataFieldSmall));
+                paintBrush = GetRegionColour(colourIndex);
+
+                if (GUILayout.Button("Apply", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    foreach ((int, int) modifiedPoliticPixel in drawnBuffer)
+                    {
+                        PoliticInfo.Politic[modifiedPoliticPixel.Item1, modifiedPoliticPixel.Item2] = colourIndex;
+                    }
+                    drawnBuffer = new List<(int, int)>();
+                }
+
+                if (GUILayout.Button("Save Changes", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    string fileDataPath = Path.Combine(testPath, "Politic.json");
+                    var json = JsonConvert.SerializeObject(PoliticInfo.Politic, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllText(fileDataPath, json);
+                }
+
+                if (GUILayout.Button("Save Image", GUILayout.MaxWidth(dataFieldSmall)))
+                {
+                    string fileDataPath = Path.Combine(testPath, "Politic.png");
+                    heightmapByteArray = ConvertToGrayscale(PoliticInfo.Politic);
+                    // var json = JsonConvert.SerializeObject(heightmapByteArray, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllBytes(fileDataPath, heightmapByteArray);
+                }
+            }
+            EditorGUILayout.EndVertical();
+
+            // EditorGUILayout.BeginVertical();
+            // if (GUILayout.Button("Inspect Light Heightmap", GUILayout.MaxWidth(dataFieldSmall)))
+            // {
+            //     InspectHeightmap(true);
+            // }
+            // if (GUILayout.Button("Inspect Dark Heightmap", GUILayout.MaxWidth(dataFieldSmall)))
+            // {
+            //     InspectHeightmap(false);
+            // }
+
+            // GUILayout.Label("Map: ", EditorStyles.boldLabel);
+            // EditorGUILayout.LabelField("Highest Point: ", topValue.ToString());
+            // EditorGUILayout.LabelField("Lowest Point", bottomValue.ToString());
+            // EditorGUILayout.EndVertical();
+
             EditorGUILayout.EndHorizontal();
 
             r = EditorGUILayout.BeginHorizontal(GUILayout.Height(20));
@@ -567,20 +966,23 @@ namespace MapEditor
             {
                 zoomLevel /= 2.0f;
                 layerPosition = DirectionButton(buttonZoomOut, layerPosition, true);
-                heightmapRect = DirectionButton(buttonZoomOut, heightmapRect);
+                mapRect = DirectionButton(buttonZoomOut, mapRect);
+                // heightmapRect = DirectionButton(buttonZoomOut, heightmapRect);
             }
 
             if (GUILayout.Button(buttonUp, GUILayout.MaxWidth(50)))
             {
                 layerPosition = DirectionButton(buttonUp, layerPosition, true);
-                heightmapRect = DirectionButton(buttonUp, heightmapRect);
+                mapRect = DirectionButton(buttonUp, mapRect);
+                // heightmapRect = DirectionButton(buttonUp, heightmapRect);
             }
 
             if (GUILayout.Button(buttonZoomIn, GUILayout.MaxWidth(100)))
             {
                 zoomLevel *= 2.0f;
                 layerPosition = DirectionButton(buttonZoomIn, layerPosition, true);
-                heightmapRect = DirectionButton(buttonZoomIn, heightmapRect);
+                mapRect = DirectionButton(buttonZoomIn, mapRect);
+                // heightmapRect = DirectionButton(buttonZoomIn, heightmapRect);
             }
             EditorGUILayout.EndHorizontal();
 
@@ -588,7 +990,8 @@ namespace MapEditor
             if (GUILayout.Button(buttonLeft, GUILayout.MaxWidth(50)))
             {
                 layerPosition = DirectionButton(buttonLeft, layerPosition, true);
-                heightmapRect = DirectionButton(buttonLeft, heightmapRect);
+                mapRect = DirectionButton(buttonLeft, mapRect);
+                // heightmapRect = DirectionButton(buttonLeft, heightmapRect);
             }
 
             GUILayout.Space(25);
@@ -597,7 +1000,7 @@ namespace MapEditor
             {
                 zoomLevel = 1.0f;
                 layerPosition = new Rect(layerOriginX, layerOriginY, startingWidth, startingHeight);
-                heightmapRect = DirectionButton(buttonReset, heightmapRect);
+                mapRect = DirectionButton(buttonReset, mapRect);
             }
 
             GUILayout.Space(25);
@@ -605,7 +1008,8 @@ namespace MapEditor
             if (GUILayout.Button(buttonRight, GUILayout.MaxWidth(50)))
             {
                 layerPosition = DirectionButton(buttonRight, layerPosition, true);
-                heightmapRect = DirectionButton(buttonRight, heightmapRect);
+                mapRect = DirectionButton(buttonRight, mapRect);
+                // heightmapRect = DirectionButton(buttonRight, heightmapRect);
             }
             EditorGUILayout.EndHorizontal();
 
@@ -614,7 +1018,8 @@ namespace MapEditor
             if (GUILayout.Button(buttonDown, GUILayout.MaxWidth(50)))
             {
                 layerPosition = DirectionButton(buttonDown, layerPosition, true);
-                heightmapRect = DirectionButton(buttonDown, heightmapRect);
+                mapRect = DirectionButton(buttonDown, mapRect);
+                // heightmapRect = DirectionButton(buttonDown, heightmapRect);
             }
             GUILayout.Space(100);
             EditorGUILayout.EndHorizontal();
@@ -630,23 +1035,61 @@ namespace MapEditor
             if (groupEnabled && !pixelSelected && mapView.Contains(mouse.mousePosition))
             {
                 Vector2 pixel = GetMouseCoordinates();
-                if ((int)pixel.x > 0 && (int)pixel.x < MapsFile.WorldWidth && (int)pixel.y > 0 && (int)pixel.y < MapsFile.WorldHeight)
+                if ((int)pixel.x > 0 && (int)pixel.x < WorldInfo.WorldSetting.WorldWidth && (int)pixel.y > 0 && (int)pixel.y < WorldInfo.WorldSetting.WorldHeight)
                     pixelData.GetPixelData((int)pixel.x, (int)pixel.y);
             }
 
-            if (groupEnabled && mapView.Contains(mouse.mousePosition) && mouse.button == 0 && mouse.type == EventType.MouseUp)
+            if (groupEnabled && !drawHeightmap && !drawClimate && !drawPolitics && mapView.Contains(mouse.mousePosition) && mouse.button == 0 && mouse.type == EventType.MouseUp)
             {
                 modifiedPixelData = new PixelData();
                 modifiedPixelData = pixelData;
                 pixelCoordinates = GetMouseCoordinates();
                 pixelSelected = true;
+                lastDungeonType = modifiedPixelData.DungeonType;
                 widthModified = false;
                 heightModified = false;
             }
 
+            if (groupEnabled && drawHeightmap && mapView.Contains(mouse.mousePosition) && mouse.button == 0 && mouse.type == EventType.MouseUp)
+            {
+                pixelCoordinates = GetMouseCoordinates();
+                if (!drawnBuffer.Contains(((int)pixelCoordinates.y, (int)pixelCoordinates.y)))
+                    drawnBuffer.Add(((int)pixelCoordinates.x, (int)pixelCoordinates.y));
+
+                if (drawnBufferCount != drawnBuffer.Count)
+                {
+                    SetHeightmap();
+                }
+            }
+
+            if (groupEnabled && drawClimate && mapView.Contains(mouse.mousePosition) && mouse.button == 0 && mouse.type == EventType.MouseUp)
+            {
+                pixelCoordinates = GetMouseCoordinates();
+                if (!drawnBuffer.Contains(((int)pixelCoordinates.y, (int)pixelCoordinates.y)))
+                    drawnBuffer.Add(((int)pixelCoordinates.x, (int)pixelCoordinates.y));
+
+                if (drawnBufferCount != drawnBuffer.Count)
+                {
+                    SetClimateMap();
+                }
+            }
+
+            if (groupEnabled && drawPolitics && mapView.Contains(mouse.mousePosition) && mouse.button == 0 && mouse.type == EventType.MouseUp)
+            {
+                pixelCoordinates = GetMouseCoordinates();
+                if (!drawnBuffer.Contains(((int)pixelCoordinates.y, (int)pixelCoordinates.y)))
+                    drawnBuffer.Add(((int)pixelCoordinates.x, (int)pixelCoordinates.y));
+
+                if (drawnBufferCount != drawnBuffer.Count)
+                {
+                    SetPoliticMap();
+                }
+            }
+
             if (mapView.Contains(mouse.mousePosition) && mouse.button == 1 && mouse.type == EventType.MouseUp)
             {
-                modifiedTownBlocks = new Dictionary<int, string>();
+                modifiedTownBlocks = new List<string>();
+                modifiedDungeonBlocks = new List<Blocks>();
                 modifiedPixelData = new PixelData();
                 pixelSelected = false;
             }
@@ -661,12 +1104,12 @@ namespace MapEditor
             if (mapView.Contains(mouse.mousePosition))
             {
                 coordinates.x = mouse.mousePosition.x - mapView.x;
-                coordinates.x = (coordinates.x * ((float)MapsFile.WorldWidth / zoomLevel)) / mapView.width;
-                coordinates.x += heightmapRect.x * (float)MapsFile.WorldWidth;
+                coordinates.x = (coordinates.x * ((float)WorldInfo.WorldSetting.WorldWidth / zoomLevel)) / mapView.width;
+                coordinates.x += mapRect.x * (float)WorldInfo.WorldSetting.WorldWidth;
 
                 coordinates.y = mouse.mousePosition.y - mapView.y;
-                coordinates.y = (coordinates.y * (float)MapsFile.WorldHeight / zoomLevel) / mapView.height;
-                coordinates.y += ((1.0f - heightmapRect.y) * (float)MapsFile.WorldHeight)- (float)MapsFile.WorldHeight / zoomLevel;
+                coordinates.y = (coordinates.y * (float)WorldInfo.WorldSetting.WorldHeight / zoomLevel) / mapView.height;
+                coordinates.y += ((1.0f - mapRect.y) * (float)WorldInfo.WorldSetting.WorldHeight)- (float)WorldInfo.WorldSetting.WorldHeight / zoomLevel;
 
                 return coordinates;
             }
@@ -678,19 +1121,37 @@ namespace MapEditor
             };
         }
 
+        protected List<string> SetListCount(List<string> rmBlocks, int width, int height)
+        {
+            int difference = width * height - rmBlocks.Count;
+            if (difference > 0)
+            {
+                for (int i = 0; i < difference; i++)
+                {
+                    rmBlocks.Add(noBlock);
+                }
+            }
+            else if (difference < 0)
+                rmBlocks.RemoveRange(rmBlocks.Count + difference, -1 * difference);
+
+            return rmBlocks;
+        }
+
         protected void SetNewLocation()
         {
             modifiedPixelData.hasLocation = true;
             modifiedPixelData.Name = "";
-            modifiedPixelData.MapId = ((ulong)pixelCoordinates.y * MapsFile.OneBillion + (ulong)pixelCoordinates.x);
-            modifiedPixelData.Latitude = 0;
-            modifiedPixelData.Longitude = 0;
+            modifiedPixelData.Region = modifiedPixelData.Politic;
+            modifiedPixelData.MapId = (ulong)((int)pixelCoordinates.y * WorldInfo.WorldSetting.WorldWidth + (int)pixelCoordinates.x);
+            modifiedPixelData.Latitude = SetPixelLongitudeLatitude(false);
+            modifiedPixelData.Longitude = SetPixelLongitudeLatitude(true);
             modifiedPixelData.LocationType = -1;
             modifiedPixelData.DungeonType = 255;
             modifiedPixelData.Key = 0;
             modifiedPixelData.exterior = new Exterior();
-            modifiedPixelData.exterior.X = (int)pixelCoordinates.x * MapsFile.WorldMapTerrainDim + (int)modifiedPixelData.Longitude;
-            modifiedPixelData.exterior.Y = (int)pixelCoordinates.y * MapsFile.WorldMapTerrainDim + (int)modifiedPixelData.Latitude;
+            modifiedPixelData.exterior.X = SetPixelXY(true);
+            modifiedPixelData.exterior.Y = SetPixelXY(false);
+            modifiedPixelData.exterior.AnotherName = "";
             modifiedPixelData.exterior.LocationId = 0;
             modifiedPixelData.exterior.ExteriorLocationId = 0;
             modifiedPixelData.exterior.BuildingCount = 0;
@@ -699,31 +1160,71 @@ namespace MapEditor
             modifiedPixelData.exterior.Height = 1;
             modifiedPixelData.exterior.PortTown = false;
             modifiedPixelData.exterior.BlockNames = new string[1];
-            modifiedPixelData.exterior.BlockNames[0] = "CUSTAA01.RMB";
-            modifiedPixelData.dungeon.X = 0;
-            modifiedPixelData.dungeon.Y = 0;
-            modifiedPixelData.dungeon.LocationId = 0;
-            modifiedPixelData.dungeon.BlockCount = 5;
-            modifiedPixelData.dungeon.blocks = new Blocks[5];
-            
-            (short, short)[] blockPosition = {(0, -1), (-1, 0), (0, 0), (1, 0), (1, 1)};
-            for (int i = 0; i < modifiedPixelData.dungeon.BlockCount; i++)
+            modifiedPixelData.exterior.BlockNames[0] = noBlock;
+            // modifiedPixelData.dungeon = SetNewDungeon();
+
+            // modifiedPixelData.Politic = modifiedPixelData.Region + 128;
+            // modifiedPixelData.RegionIndex = modifiedPixelData.Politic;
+            // modifiedPixelData.LocationIndex = 0;
+        }
+
+        protected int SetPixelLongitudeLatitude(bool isLongitude)
+        {
+            int size;
+            int pixelSize;
+
+            if (isLongitude)
             {
-                modifiedPixelData.dungeon.blocks[i] = new Blocks();
-                modifiedPixelData.dungeon.blocks[i].X = blockPosition[i].Item1;
-                modifiedPixelData.dungeon.blocks[i].Z = blockPosition[i].Item2;
-
-                if (i == 2)
-                    modifiedPixelData.dungeon.blocks[i].IsStartingBlock = true;
-                else modifiedPixelData.dungeon.blocks[i].IsStartingBlock = false;
-
-                modifiedPixelData.dungeon.blocks[i].WaterLevel = 0;
-                modifiedPixelData.dungeon.blocks[i].CastleBlock = false;
+                size = (int)pixelCoordinates.x * MapsFile.WorldMapTileDim;
+                pixelSize = modifiedPixelData.exterior.Width;
+            }
+            else{
+                size = (WorldInfo.WorldSetting.WorldHeight - (int)pixelCoordinates.y) * MapsFile.WorldMapTileDim;
+                pixelSize = modifiedPixelData.exterior.Height;
             }
 
-            modifiedPixelData.Politic = modifiedPixelData.Region;
-            modifiedPixelData.RegionIndex = modifiedPixelData.Politic + 128;
-            modifiedPixelData.LocationIndex = 0;
+            switch (pixelSize)
+            {
+                case 1:
+                    size += 40;
+                    break;
+
+                case 2:
+                    size += 32;
+                    break;
+
+                case 3:
+                case 5:
+                    size += 24;
+                    break;
+
+                case 4:
+                case 6:
+                    size += 16;
+                    break;
+
+                case 7:
+                    size += 8;
+                    break;
+
+                default:
+                    break;
+            }
+            return size;
+        }
+
+        protected int SetPixelXY(bool isX)
+        {
+            int size;
+
+            if (isX)
+            {
+                size = (int)pixelCoordinates.x * MapsFile.WorldMapTerrainDim + (8 - modifiedPixelData.exterior.Width) * 2048;
+            }
+            else{
+                size = ((int)pixelCoordinates.y * MapsFile.WorldMapTerrainDim + (8 - modifiedPixelData.exterior.Height) * 2048) + 1;
+            }
+            return size;
         }
 
         protected void ApplyChanges()
@@ -745,14 +1246,18 @@ namespace MapEditor
 
                 if (mapTableList.Exists(x => x.MapId == modifiedLocation.MapId))
                     mapTableList.RemoveAll(x => x.MapId == modifiedLocation.MapId);
+                Debug.Log("Adding location " + modifiedLocation.MapId);
                 mapTableList.Add(modifiedLocation);
                 mapTableList.Sort();
 
                 Worldmaps.Worldmap[modifiedPixelData.Region].LocationCount = mapTableList.Count();
+                Worldmaps.Worldmap[modifiedPixelData.Region].MapTable = new DFRegion.RegionMapTable[Worldmaps.Worldmap[modifiedPixelData.Region].LocationCount];
+                Worldmaps.Worldmap[modifiedPixelData.Region].MapTable = mapTableList.ToArray();
                 DFLocation[] newLocations = new DFLocation[Worldmaps.Worldmap[modifiedPixelData.Region].LocationCount];
 
                 // Recreating new MapNames, MapIdLookup and MapName Lookup for the region
                 bool newLocationAdded = false;
+                bool locationModified = false;
                 int counter = 0;
                 string[] newMapNames = new string[Worldmaps.Worldmap[modifiedPixelData.Region].LocationCount];
                 Dictionary<ulong, int> newMapIdLookup = new Dictionary<ulong, int>();
@@ -768,49 +1273,60 @@ namespace MapEditor
 
                     if (!newLocationAdded)
                     {
-                        Worldmaps.GetLocation(modifiedPixelData.Region, counter, out location);
+                        if (Worldmaps.Worldmap[modifiedPixelData.Region].Locations.Length > counter)
+                            Worldmaps.GetLocation(modifiedPixelData.Region, counter, out location);
+                        else location = GetDFLocationFromPixelData(modifiedPixelData);
                     }
                     else Worldmaps.GetLocation(modifiedPixelData.Region, (counter - 1), out location);
 
-                    if (modifiedLocation.MapId == mapTable.MapId)
+                    if (location.MapTableData.MapId == mapTable.MapId && modifiedLocation.MapId == mapTable.MapId)
                     {
+                        if (!newMapNameLookup.ContainsKey(modifiedPixelData.Name))
+                            newMapNameLookup.Add(modifiedPixelData.Name, counter);
+                        newMapNames[counter] = modifiedPixelData.Name;
                         DFLocation createdLocation = new DFLocation();
                         createdLocation = GetDFLocationFromPixelData(modifiedPixelData);
+                        createdLocation.LocationIndex = counter;
+                        newLocations[counter] = new DFLocation();
                         newLocations[counter] = createdLocation;
+                        locationModified = true;
+                        Debug.Log("Location modified: " + createdLocation.Name + "; counter: " + counter);
+                        counter++;
                     }
-                    if (location.MapTableData.MapId == mapTable.MapId)
+                    else if (location.MapTableData.MapId == mapTable.MapId)
                     {
                         if (!newMapNameLookup.ContainsKey(Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter]))
                             newMapNameLookup.Add(Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter], counter);
                         newMapNames[counter] = Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter];
-                        newLocations[counter] = location;                        
+                        newLocations[counter] = new DFLocation();
+                        location.LocationIndex = counter;
+                        newLocations[counter] = location;
+                        counter++;
                     }
                     else {
                         if (!newMapNameLookup.ContainsKey(modifiedPixelData.Name))
                             newMapNameLookup.Add(modifiedPixelData.Name, counter);
                         newMapNames[counter] = modifiedPixelData.Name;
                         newLocationAdded = true;
-                        Debug.Log("New location added");
                         DFLocation createdLocation = new DFLocation();
                         createdLocation = GetDFLocationFromPixelData(modifiedPixelData);
+                        createdLocation.LocationIndex = counter;
+                        newLocations[counter] = new DFLocation();
                         newLocations[counter] = createdLocation;
+                        Debug.Log("New location added: " + createdLocation.Name + "; counter: " + counter);
                     }
 
-                    if (newLocationAdded && (counter + 1) < mapTableList.Count)
-                    {
-                        if (!newMapNameLookup.ContainsKey(Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter]))
-                            newMapNameLookup.Add(Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter], (counter + 1));
-                        newMapNames[counter + 1] = Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter];
-                    }
+                    // if (newLocationAdded && (counter + 1) < mapTableList.Count)
+                    // {
+                    //     if (!newMapNameLookup.ContainsKey(Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter]))
+                    //         newMapNameLookup.Add(Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter], (counter + 1));
+                    //     newMapNames[counter + 1] = Worldmaps.Worldmap[modifiedPixelData.Region].MapNames[counter];
+                    // }
 
-                    Debug.Log("Region: " + modifiedPixelData.Region + ", location: " + counter);
-
-                    if ((counter + 1) == mapTableList.Count)
+                    if ((counter) == mapTableList.Count)
                     {
                         break;
                     }
-
-                    counter++;
                 }
 
                 Worldmaps.Worldmap[modifiedPixelData.Region].MapNames = new string[Worldmaps.Worldmap[modifiedPixelData.Region].LocationCount];
@@ -840,10 +1356,94 @@ namespace MapEditor
             regionManager.Show();
         }
 
-        protected void OpenBlockInspector()
+        protected void OpenFactionManager()
         {
-            BlockInspector blockInspector = (BlockInspector) EditorWindow.GetWindow(typeof(BlockInspector), false, "Block Inspector");
-            blockInspector.Show();
+            FactionManager factionManager = (FactionManager) EditorWindow.GetWindow(typeof(FactionManager), false, "Faction Manager");
+            factionManager.Show();
+        }
+
+        protected void CreateLargeHeightmap()
+        {
+            for (int tileX = 0; tileX < 30; tileX++)
+            {
+                for (int tileY = 0; tileY < 24; tileY++)
+                {
+                    byte[,] largeHeightmap = new byte[MapsFile.TileDim * 5, MapsFile.TileDim * 5];
+                    byte[,] heightmap = new byte[MapsFile.TileDim, MapsFile.TileDim];
+                    Texture2D textureTiles = new Texture2D(MapsFile.TileDim, MapsFile.TileDim);
+                    ImageConversion.LoadImage(textureTiles, File.ReadAllBytes(Path.Combine(WorldMaps.tilesPath, "woods_" + tileX + "_" + tileY + ".png")));
+                    heightmap = ConvertToMatrix(textureTiles);
+
+                    for (int x = 0; x < MapsFile.TileDim * 5; x++)
+                    {
+                        for (int y = 0; y < MapsFile.TileDim * 5; y++)
+                        {
+                            int subX = x / 5;
+                            int subY = y / 5;
+                            byte subValue = heightmap[subX, subY];
+
+                            int check = 0;
+
+                            if (subValue < 3)
+                                check = subValue;
+                            else
+                            {
+                                check = UnityEngine.Random.Range(subValue - 5, subValue + 5);
+                                if (check < 4)
+                                    check = 4;
+                            }
+
+                            if (check < 0)
+                                check = 0;
+                            if (check > 255)
+                                check = 255;
+
+                            largeHeightmap[x, y] = (byte)check;
+                        }
+                    }
+
+                    string fileDataPath = Path.Combine(testPath, "woodsLarge_" + tileX + "_" + tileY + ".json");
+                    var json = JsonConvert.SerializeObject(largeHeightmap, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+                    File.WriteAllText(fileDataPath, json);
+                }
+            }
+        }
+
+        protected void CreateLargeClimatemap()
+        {
+            Texture2D climateMapImage = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight);
+            Color32[] climateMap = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
+            byte[] climateArray = new byte[MapsFile.WorldWidth * MapsFile.WorldHeight * 4];
+            bool hemisphereNorth;
+            int offset = 0;
+
+            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            {
+                for (int y = 0; y < MapsFile.WorldHeight; y++)
+                {
+                    offset = (MapsFile.WorldHeight - y - 1) * MapsFile.WorldWidth + x;
+
+                    if (SmallHeightmap.Woods[x, y] > 80 + y * (200 / MapsFile.WorldHeight))
+                        climateMap[offset] = new Color32((byte)MapsFile.Climates.Mountain, (byte)MapsFile.Climates.Mountain, (byte)MapsFile.Climates.Mountain, 255);
+                    else if (SmallHeightmap.Woods[x, y] > 50 + y * (200 / MapsFile.WorldHeight))
+                        climateMap[offset] = new Color32((byte)MapsFile.Climates.MountainWoods, (byte)MapsFile.Climates.MountainWoods, (byte)MapsFile.Climates.MountainWoods, 255);
+                    else climateMap[offset] = new Color32((byte)MapsFile.Climates.Ocean, (byte)MapsFile.Climates.Ocean, (byte)MapsFile.Climates.Ocean, 255);
+                }
+            }
+
+            climateMapImage.SetPixels32(climateMap);
+            climateArray = ImageConversion.EncodeToPNG(climateMapImage);
+            string fileDataPath = Path.Combine(testPath, "ClimateMap.png");
+            File.WriteAllBytes(fileDataPath, climateArray);
+        }
+
+        protected void CreateWorldSettings()
+        {
+            string fileDataPath = Path.Combine(WorldMaps.mapPath, "WorldData.json");
+            // File.Create(fileDataPath);
+            WorldInfo.WorldSetting = new WorldStats();
+            var json = JsonConvert.SerializeObject(WorldData.WorldSetting, new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore });
+            File.WriteAllText(fileDataPath, json);
         }
 
         protected void SaveCurrentWorld()
@@ -885,46 +1485,248 @@ namespace MapEditor
             // }
         }
 
-        protected string[] SetRMBBlocks()
+        protected string[] SetBlocks(int pref, bool isRMB)
         {
-            string[] blockNames = new string[499];
+            List<string> blockNames = new List<string>();
             DFBlock block = new DFBlock();
-            string rmbPath = Path.Combine(WorldMaps.mapPath, "RMB");
-
-            for (int i = 0; i < blockNames.Length; i++)
+            string blockPath;
+            string blockExtension;
+            string prefix;
+            if (isRMB)
             {
-                block = blockFileReader.GetBlock(i);
-            
-                if (block.Name == null || block.Name == "")
-                    break;
-
-                if (block.Name.EndsWith("RMB"))
-                    blockNames[i] = block.Name;
+                blockExtension = "RMB";
+                prefix = rmbBlockPrefixes[pref];
+            }
+            else{
+                blockExtension = "RDB";
+                prefix = rdbBlockLetters[pref];
             }
 
-            if (!Directory.Exists(rmbPath))
+            blockPath = Path.Combine(testPath, blockExtension);
+
+            int index = 0;
+
+            while (blockFileReader.LoadBlock(index, out block))
             {
-                Debug.Log("invalid RMB directory: " + rmbPath);
+                if (block.Name.StartsWith(prefix) && block.Name.EndsWith(blockExtension))
+                {
+                    blockNames.Add(block.Name);
+                }
+                index++;
+            }
+
+            if (!Directory.Exists(blockPath))
+            {
+                Debug.Log("invalid blocks directory: " + blockPath);
             }
             else
             {
-                var rmbFiles = Directory.GetFiles(rmbPath, "*" + "RMB", SearchOption.AllDirectories);
+                string[] blockFiles = Directory.GetFiles(blockPath, prefix + "*." + blockExtension + ".json");
                 // var rmbFileNames = new string[rmbFiles.Length];
                 // var loadedRMBNames = GetAllRMBFileNames();
 
-                for (int i = 0; i < rmbFiles.Length; i++)
+                for (int i = 0; i < blockFiles.Length; i++)
                 {
-                    blockNames.Append<string>(rmbFiles[i]);
+                    string blockToAdd = blockFiles[i].Remove(0, blockPath.Length + 1);
+                    blockToAdd = blockToAdd.Remove(12);
+                    blockNames.Add(blockToAdd);
                 }
             }
 
-            List<string> blockNamesList = new List<string>();
-            blockNamesList = blockNames.ToList();
-            blockNamesList.Sort();
-            blockNames = new string[blockNamesList.Count];
-            blockNames = blockNamesList.ToArray();
+            blockNames.Sort();
+    
+            return blockNames.ToArray();
+        }
 
-            return blockNames;
+        protected int GetDBlockIndex()
+        {
+            int counter = 0;
+
+            foreach (Blocks block in modifiedDungeonBlocks)
+            {
+                if (pointedCoordinates == (block.X, block.Z))
+                    return counter;
+
+                counter++;
+            }
+
+            return -1;
+        }
+
+        protected Blocks GetDungeonBlockData()
+        {
+            Blocks toBlock = new Blocks();
+
+            toBlock.X = pointedCoordinates.Item1;
+            toBlock.Z = pointedCoordinates.Item2;
+            if (pointedCoordinates == (0, 0))
+                toBlock.IsStartingBlock = true;
+            else toBlock.IsStartingBlock = false;
+            toBlock.BlockName = RDBBlocks[availableDBlocks];
+            toBlock.WaterLevel = 0;
+            toBlock.CastleBlock = false;
+
+            return toBlock;
+        }
+
+        protected Dungeon SetNewDungeon()
+        {
+            Dungeon dungeon = new Dungeon();
+
+            dungeon.DungeonName = modifiedPixelData.Name;
+            dungeon.X = modifiedPixelData.exterior.X;
+            dungeon.Y = modifiedPixelData.exterior.Y;
+            dungeon.LocationId = 0;
+            dungeon.BlockCount = 5;
+            dungeon.blocks = new Blocks[5];
+            modifiedDungeonBlocks = new List<Blocks>();
+
+            (short, short)[] blockPosition = {(0, -1), (-1, 0), (0, 0), (1, 0), (1, 1)};
+            for (int i = 0; i < dungeon.BlockCount; i++)
+            {
+                if (i == 2)
+                {
+                    dungeon.blocks[i] = new Blocks();
+                    dungeon.blocks[i].X = blockPosition[i].Item1;
+                    dungeon.blocks[i].Z = blockPosition[i].Item2;
+                    dungeon.blocks[i].BlockName = "N0000000.RDB";
+
+                    dungeon.blocks[i].IsStartingBlock = true;
+
+                    dungeon.blocks[i].WaterLevel = 0;
+                    dungeon.blocks[i].CastleBlock = false;
+                    modifiedDungeonBlocks.Add(dungeon.blocks[i]);
+                }
+                else modifiedDungeonBlocks.Add(RandomBorderBlock(blockPosition[i].Item2, blockPosition[i].Item1));
+            }
+
+            return dungeon;
+        }
+
+        protected Blocks RandomBorderBlock(int z, int x)
+        {
+            Blocks block = new Blocks();
+
+            block.X = x;
+            block.Z = z;
+            block.IsStartingBlock = false;
+            block.BlockName = "B000000" + (UnityEngine.Random.Range(0, 10)).ToString() + ".RDB";
+            block.WaterLevel = 0;
+            block.CastleBlock = false;
+
+            return block;
+        }
+
+        protected static DFLocation.ClimateSettings SetClimate(int climateIndex)
+        {
+            DFLocation.ClimateSettings climate = new DFLocation.ClimateSettings();
+
+            switch (climateIndex)
+            {
+                case 224:
+                    climate.WorldClimate = 224;
+                    climate.ClimateType = 0;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)503;
+                    climate.GroundArchive = 2;
+                    climate.NatureArchive = 503;
+                    climate.SkyBase = 8;
+                    climate.People = (FactionFile.FactionRaces)2;
+                    climate.Names = 0;
+                    break;
+
+                case 225:
+                    climate.WorldClimate = 225;
+                    climate.ClimateType = 0;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)503;
+                    climate.GroundArchive = 2;
+                    climate.NatureArchive = 503;
+                    climate.SkyBase = 8;
+                    climate.People = (FactionFile.FactionRaces)2;
+                    climate.Names = 0;
+                    break;
+
+                case 226:
+                    climate.WorldClimate = 226;
+                    climate.ClimateType = (DFLocation.ClimateBaseType)100;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)510;
+                    climate.GroundArchive = 102;
+                    climate.NatureArchive = 510;
+                    climate.SkyBase = 0;
+                    climate.People = (FactionFile.FactionRaces)0;
+                    climate.Names = 0;
+                    break;
+
+                case 227:
+                    climate.WorldClimate = 227;
+                    climate.ClimateType = (DFLocation.ClimateBaseType)400;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)500;
+                    climate.GroundArchive = 402;
+                    climate.NatureArchive = 500;
+                    climate.SkyBase = 24;
+                    climate.People = (FactionFile.FactionRaces)2;
+                    climate.Names = 0;
+                    break;
+
+                case 228:
+                    climate.WorldClimate = 228;
+                    climate.ClimateType = (DFLocation.ClimateBaseType)400;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)502;
+                    climate.GroundArchive = 402;
+                    climate.NatureArchive = 502;
+                    climate.SkyBase = 24;
+                    climate.People = (FactionFile.FactionRaces)3;
+                    climate.Names = 0;
+                    break;
+
+                case 229:
+                    climate.WorldClimate = 229;
+                    climate.ClimateType = 0;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)501;
+                    climate.GroundArchive = 2;
+                    climate.NatureArchive = 501;
+                    climate.SkyBase = 24;
+                    climate.People = (FactionFile.FactionRaces)3;
+                    climate.Names = 0;
+                    break;
+
+                case 230:
+                    climate.WorldClimate = 230;
+                    climate.ClimateType = (DFLocation.ClimateBaseType)300;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)506;
+                    climate.GroundArchive = 102;
+                    climate.NatureArchive = 506;
+                    climate.SkyBase = 16;
+                    climate.People = (FactionFile.FactionRaces)3;
+                    climate.Names = 0;
+                    break;
+
+                case 231:
+                    climate.WorldClimate = 231;
+                    climate.ClimateType = (DFLocation.ClimateBaseType)300;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)504;
+                    climate.GroundArchive = 302;
+                    climate.NatureArchive = 504;
+                    climate.SkyBase = 16;
+                    climate.People = (FactionFile.FactionRaces)3;
+                    climate.Names = 0;
+                    break;
+
+                case 232:
+                    climate.WorldClimate = 232;
+                    climate.ClimateType = (DFLocation.ClimateBaseType)300;
+                    climate.NatureSet = (DFLocation.ClimateTextureSet)508;
+                    climate.GroundArchive = 302;
+                    climate.NatureArchive = 508;
+                    climate.SkyBase = 16;
+                    climate.People = (FactionFile.FactionRaces)3;
+                    climate.Names = 0;
+                    break;
+
+                default:
+                    break;
+            }
+
+            return climate;
         }
 
         protected void ResetSelectedCoordinates()
@@ -934,11 +1736,11 @@ namespace MapEditor
 
         protected void SetRegionNames()
         {
-            regionNames = new string[MapsFile.TempRegionCount];
+            regionNames = new string[WorldInfo.WorldSetting.Regions];
 
-            for (int i = 0; i < MapsFile.TempRegionCount; i++)
+            for (int i = 0; i < WorldInfo.WorldSetting.Regions; i++)
             {
-                regionNames[i] = MapsFile.RegionNames[i];
+                regionNames[i] = WorldInfo.WorldSetting.RegionNames[i];
             }
         }
 
@@ -954,9 +1756,10 @@ namespace MapEditor
 
         protected void SetHeightmap()
         {
-            Color32[] heightmapBuffer = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
-            heightMap = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight, TextureFormat.ARGB32, false);
+            Color32[] heightmapBuffer = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
+            heightMap = new Texture2D(WorldInfo.WorldSetting.WorldWidth, WorldInfo.WorldSetting.WorldHeight, TextureFormat.ARGB32, false);
             heightMap.filterMode = FilterMode.Point;
+            heightMap.wrapMode = TextureWrapMode.Clamp;
             heightmapBuffer = CreateHeightmap();
             heightMap.SetPixels32(heightmapBuffer);
             heightMap.Apply();
@@ -964,9 +1767,10 @@ namespace MapEditor
 
         protected void SetLocationsMap()
         {
-            Color32[] locationsMapBuffer = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
-            locationsMap = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight, TextureFormat.ARGB32, false);
+            Color32[] locationsMapBuffer = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
+            locationsMap = new Texture2D(WorldInfo.WorldSetting.WorldWidth, WorldInfo.WorldSetting.WorldHeight, TextureFormat.ARGB32, false);
             locationsMap.filterMode = FilterMode.Point;
+            locationsMap.wrapMode = TextureWrapMode.Clamp;
             locationsMapBuffer = CreateLocationsMap();
             locationsMap.SetPixels32(locationsMapBuffer);
             locationsMap.Apply();
@@ -974,9 +1778,10 @@ namespace MapEditor
 
         protected void SetClimateMap()
         {
-            Color32[] climateMapBuffer = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
-            climateMap = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight, TextureFormat.ARGB32, false);
+            Color32[] climateMapBuffer = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
+            climateMap = new Texture2D(WorldInfo.WorldSetting.WorldWidth, WorldInfo.WorldSetting.WorldHeight, TextureFormat.ARGB32, false);
             climateMap.filterMode = FilterMode.Point;
+            climateMap.wrapMode = TextureWrapMode.Clamp;
             climateMapBuffer = CreateClimateMap();
             climateMap.SetPixels32(climateMapBuffer);
             climateMap.Apply();
@@ -984,9 +1789,10 @@ namespace MapEditor
 
         protected void SetPoliticMap()
         {
-            Color32[] politicMapBuffer = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
-            politicMap = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight, TextureFormat.ARGB32, false);
+            Color32[] politicMapBuffer = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
+            politicMap = new Texture2D(WorldInfo.WorldSetting.WorldWidth, WorldInfo.WorldSetting.WorldHeight, TextureFormat.ARGB32, false);
             politicMap.filterMode = FilterMode.Point;
+            politicMap.wrapMode = TextureWrapMode.Clamp;
             politicMapBuffer = CreatePoliticMap();
             politicMap.SetPixels32(politicMapBuffer);
             politicMap.Apply();
@@ -994,7 +1800,7 @@ namespace MapEditor
 
         protected void SetHeightmapRect()
         {
-            heightmapRect = new Rect(heightmapOriginX, heightmapOriginY, 1, 1);
+            mapRect = new Rect(heightmapOriginX, heightmapOriginY, 1, 1);
         }
 
         protected void SetMaps()
@@ -1006,94 +1812,109 @@ namespace MapEditor
 
         static Color32[] CreateHeightmap()
         {
-            Color32[] colours = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
+            Color32[] colours = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
 
-            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            for (int x = 0; x < WorldInfo.WorldSetting.WorldWidth; x++)
             {
-                for (int y = 0; y < MapsFile.WorldHeight; y++)
+                for (int y = 0; y < WorldInfo.WorldSetting.WorldHeight; y++)
                 {
+                    int offset = (((WorldInfo.WorldSetting.WorldHeight - y - 1) * WorldInfo.WorldSetting.WorldWidth) + x);
                     byte value = SmallHeightmap.GetHeightMapValue(x, y);
                     int terrain;
-                    Color32 colour;
+                    Color32 colour = new Color32();;
 
-                    if (value < 3)
-                        terrain = -1;
-
-                    else
-                        terrain = (value / 10);
-
-                    switch (terrain)
+                    if (drawnBuffer.Count > 0 && drawnBuffer.Contains((x, y)))
                     {
-                        case -1:
-                            colour = new Color32(40, 71, 166, (byte)mapAlphaChannel);
-                            break;
-
-                        case 0:
-                            colour = new Color32(175, 200, 168, (byte)mapAlphaChannel);
-                            break;
-
-                        case 1:
-                            colour = new Color32(148, 176, 141, (byte)mapAlphaChannel);
-                            break;
-
-                        case 2:
-                            colour = new Color32(123, 156, 118, (byte)mapAlphaChannel);
-                            break;
-
-                        case 3:
-                            colour = new Color32(107, 144, 109, (byte)mapAlphaChannel);
-                            break;
-
-                        case 4:
-                            colour = new Color32(93, 130, 94, (byte)mapAlphaChannel);
-                            break;
-
-                        case 5:
-                            colour = new Color32(82, 116, 86, (byte)mapAlphaChannel);
-                            break;
-
-                        case 6:
-                            colour = new Color32(77, 110, 78, (byte)mapAlphaChannel);
-                            break;
-
-                        case 7:
-                            colour = new Color32(68, 99, 67, (byte)mapAlphaChannel);
-                            break;
-
-                        case 8:
-                            colour = new Color32(61, 89, 53, (byte)mapAlphaChannel);
-                            break;
-
-                        case 9:
-                            colour = new Color32(52, 77, 45, (byte)mapAlphaChannel);
-                            break;
-
-                        case 10:
-                            colour = new Color32(34, 51, 34, (byte)mapAlphaChannel);
-                            break;
-
-                        default:
-                            colour = new Color32(40, 47, 40, (byte)mapAlphaChannel);
-                            break;
+                        colours[offset] = paintBrush;
                     }
-                    //}
+                    else
+                    {
+                        if (value < 4)
+                            terrain = -1;
 
-                    colours[(MapsFile.WorldHeight - 1 - y) * MapsFile.WorldWidth + x] = colour;
+                        else
+                            terrain = value;
+
+                        colour = GetElevationColour(terrain);
+                        colours[offset] = colour;
+                    }
                 }
             }
 
             return colours;
         }
 
+        public static Color32 GetElevationColour(int index)
+        {
+            Color32 colour = new Color32();
+
+            switch (index)
+            {
+                case -1:
+                    colour = new Color32(40, 71, 166, (byte)mapAlphaChannel);
+                    break;
+
+                // case 0:
+                //     colour = new Color32(175, 200, 168, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 1:
+                //     colour = new Color32(148, 176, 141, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 2:
+                //     colour = new Color32(123, 156, 118, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 3:
+                //     colour = new Color32(107, 144, 109, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 4:
+                //     colour = new Color32(93, 130, 94, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 5:
+                //     colour = new Color32(82, 116, 86, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 6:
+                //     colour = new Color32(77, 110, 78, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 7:
+                //     colour = new Color32(68, 99, 67, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 8:
+                //     colour = new Color32(61, 89, 53, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 9:
+                //     colour = new Color32(52, 77, 45, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 10:
+                //     colour = new Color32(34, 51, 34, (byte)mapAlphaChannel);
+                //     break;
+
+                default:
+                    colour = new Color32((byte)(index / 2), (byte)(128 + (index / 2)), (byte)(index / 4), (byte)mapAlphaChannel);
+                    break;
+            }
+
+            return colour;
+        }
+
         static Color32[] CreateLocationsMap()
         {
-            Color32[] colours = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
+            Color32[] colours = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
 
-            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            for (int x = 0; x < WorldInfo.WorldSetting.WorldWidth; x++)
             {
-                for (int y = 0; y < MapsFile.WorldHeight; y++)
+                for (int y = 0; y < WorldInfo.WorldSetting.WorldHeight; y++)
                 {
-                    int offset = (((MapsFile.WorldHeight - y - 1) * MapsFile.WorldWidth) + x);
+                    int offset = (((WorldInfo.WorldSetting.WorldHeight - y - 1) * WorldInfo.WorldSetting.WorldWidth) + x);
                     int sampleRegion = PoliticInfo.ConvertMapPixelToRegionIndex(x, y);
 
                     MapSummary summary;
@@ -1179,345 +2000,380 @@ namespace MapEditor
 
         static Color32[] CreateClimateMap()
         {
-            Color32[] colours = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
+            Color32[] colours = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
             Color32 colour = new Color32();
 
-            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            for (int x = 0; x < WorldInfo.WorldSetting.WorldWidth; x++)
             {
-                for (int y = 0; y < MapsFile.WorldHeight; y++)
+                for (int y = 0; y < WorldInfo.WorldSetting.WorldHeight; y++)
                 {
-                    int offset = (((MapsFile.WorldHeight - y - 1) * MapsFile.WorldWidth) + x);
+                    int offset = (((WorldInfo.WorldSetting.WorldHeight - y - 1) * WorldInfo.WorldSetting.WorldWidth) + x);
 
                     int value = ClimateInfo.Climate[x, y];
 
-                    switch (value)
+                    if (drawnBuffer.Count > 0 && drawnBuffer.Contains((x, y)))
                     {
-                        case 223:   // Ocean 
-                            colour = new Color32(0, 0, 0, 0);
-                            break;
-
-                        case 224:   // Desert
-                            colour = new Color32(217, 217, 217, (byte)mapAlphaChannel);
-                            break;
-
-                        case 225:   // Desert2
-                            colour = new Color32(255, 255, 255, (byte)mapAlphaChannel);
-                            break;
-
-                        case 226:   // Mountains
-                            colour = new Color32(230, 196, 230, (byte)mapAlphaChannel);
-                            break;
-
-                        case 227:   // RainForest
-                            colour = new Color32(0, 152, 25, (byte)mapAlphaChannel);
-                            break;
-
-                        case 228:   // Swamp
-                            colour = new Color32(115, 153, 141, (byte)mapAlphaChannel);
-                            break;
-
-                        case 229:   // Sub tropical
-                            colour = new Color32(180, 180, 179, (byte)mapAlphaChannel);
-                            break;
-
-                        case 230:   // Woodland hills (aka Mountain Woods)
-                            colour = new Color32(191, 143, 191, (byte)mapAlphaChannel);
-                            break;
-
-                        case 231:   // TemperateWoodland (aka Woodlands)
-                            colour = new Color32(0, 190, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 232:   // Haunted woodland
-                            colour = new Color32(190, 166, 143, (byte)mapAlphaChannel);
-                            break;
-
-                        default:
-                            colour = new Color32(0, 0, 0, 0);
-                            break;
+                        colours[offset] = paintBrush;
                     }
-                    colours[offset] = colour;
-                }                
+                    else
+                    {
+                        colour = GetClimateColour(value);
+                        colours[offset] = colour;
+                    }
+                }
             }
             return colours;
         }
 
-        static Color32[] CreatePoliticMap()
+        public static Color32 GetClimateColour(int index)
         {
-            Color32[] colours = new Color32[MapsFile.WorldWidth * MapsFile.WorldHeight];
             Color32 colour = new Color32();
 
-            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            switch (index)
             {
-                for (int y = 0; y < MapsFile.WorldHeight; y++)
-                {
-                    int offset = (((MapsFile.WorldHeight - y - 1) * MapsFile.WorldWidth) + x);
+                case -1:    // transparent frame
+                case 223:   // Ocean 
+                    colour = new Color32(0, 0, 0, 0);
+                    break;
 
+                case 224:   // Desert
+                    colour = new Color32(217, 217, 217, (byte)mapAlphaChannel);
+                    break;
+
+                case 225:   // Desert2
+                    colour = new Color32(255, 255, 255, (byte)mapAlphaChannel);
+                    break;
+
+                case 226:   // Mountains
+                    colour = new Color32(230, 196, 230, (byte)mapAlphaChannel);
+                    break;
+
+                case 227:   // RainForest
+                    colour = new Color32(0, 152, 25, (byte)mapAlphaChannel);
+                    break;
+
+                case 228:   // Swamp
+                    colour = new Color32(115, 153, 141, (byte)mapAlphaChannel);
+                    break;
+
+                case 229:   // Sub tropical
+                    colour = new Color32(180, 180, 179, (byte)mapAlphaChannel);
+                    break;
+
+                case 230:   // Woodland hills (aka Mountain Woods)
+                    colour = new Color32(191, 143, 191, (byte)mapAlphaChannel);
+                    break;
+
+                case 231:   // TemperateWoodland (aka Woodlands)
+                    colour = new Color32(0, 190, 0, (byte)mapAlphaChannel);
+                    break;
+
+                case 232:   // Haunted woodland
+                    colour = new Color32(190, 166, 143, (byte)mapAlphaChannel);
+                    break;
+
+                default:
+                    colour = new Color32(0, 0, 0, 0);
+                    break;
+            }
+
+                    return colour;
+        }
+
+        static Color32[] CreatePoliticMap()
+        {
+            Color32[] colours = new Color32[WorldInfo.WorldSetting.WorldWidth * WorldInfo.WorldSetting.WorldHeight];
+            Color32 colour = new Color32();
+
+            for (int x = 0; x < WorldInfo.WorldSetting.WorldWidth; x++)
+            {
+                for (int y = 0; y < WorldInfo.WorldSetting.WorldHeight; y++)
+                {
+                    int offset = (((WorldInfo.WorldSetting.WorldHeight - y - 1) * WorldInfo.WorldSetting.WorldWidth) + x);
                     int value = PoliticInfo.ConvertMapPixelToRegionIndex(x, y);
 
-                    switch (value)
+                    if (drawnBuffer.Count > 0 && drawnBuffer.Contains((x, y)))
                     {
-                        case 64:    // Sea
-                            colour = new Color32(0, 0, 0, 0);
-                            break;
-
-                        case 0:     // The Alik'r Desert
-                            colour = new Color32(55, 170, 253, (byte)mapAlphaChannel);
-                            break;
-
-                        case 1:     // The Dragontail Mountains
-                            colour = new Color32(149, 43, 29, (byte)mapAlphaChannel);
-                            break;
-
-                        case 2:     // Glenpoint Foothills - unused
-                            colour = new Color32(123, 156, 118, (byte)mapAlphaChannel);
-                            break;
-
-                        case 3:     // Daggerfall Bluffs - unused
-                            colour = new Color32(107, 144, 109, (byte)mapAlphaChannel);
-                            break;
-
-                        case 4:     // Yeorth Burrowland - unused
-                            colour = new Color32(93, 130, 94, (byte)mapAlphaChannel);
-                            break;
-
-                        case 5:     // Dwynnen
-                            colour = new Color32(212, 180, 105, (byte)mapAlphaChannel);
-                            break;
-
-                        case 6:     // Ravennian Forest - unused
-                            colour = new Color32(77, 110, 78, (byte)mapAlphaChannel);
-                            break;
-
-                        case 7:     // Devilrock - unused
-                            colour = new Color32(68, 99, 67, (byte)mapAlphaChannel);
-                            break;
-
-                        case 8:     // Malekna Forest - unused
-                            colour = new Color32(61, 89, 53, (byte)mapAlphaChannel);
-                            break;
-
-                        case 9:     // The Isle of Balfiera
-                            colour = new Color32(158, 0, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 10:    // Bantha - unused
-                            colour = new Color32(34, 51, 34, (byte)mapAlphaChannel);
-                            break;
-
-                        case 11:    // Dak'fron
-                            colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
-                            break;
-
-                        case 12:    // The Islands in the Western Iliac Bay - unused
-                            colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
-                            break;
-
-                        case 13:    // Tamarilyn Point - unused
-                            colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
-                            break;
-
-                        case 14:    // Lainlyn Cliffs - unused
-                            colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
-                            break;
-
-                        case 15:    // Bjoulsae River - unused
-                            colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
-                            break;
-
-                        case 16:    // The Wrothgarian Mountains
-                            colour = new Color32(250, 201, 11, (byte)mapAlphaChannel);
-                            break;
-
-                        case 17:    // Daggerfall
-                            colour = new Color32(0, 126, 13, (byte)mapAlphaChannel);
-                            break;
-
-                        case 18:    // Glenpoint
-                            colour = new Color32(152, 152, 152, (byte)mapAlphaChannel);
-                            break;
-
-                        case 19:    // Betony
-                            colour = new Color32(31, 55, 132, (byte)mapAlphaChannel);
-                            break;
-
-                        case 20:    // Sentinel
-                            colour = new Color32(158, 134, 17, (byte)mapAlphaChannel);
-                            break;
-
-                        case 21:    // Anticlere
-                            colour = new Color32(30, 30, 30, (byte)mapAlphaChannel);
-                            break;
-
-                        case 22:    // Lainlyn
-                            colour = new Color32(38, 127, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 23:    // Wayrest
-                            colour = new Color32(0, 248, 255, (byte)mapAlphaChannel);
-                            break;
-
-                        case 24:    // Gen Tem High Rock village - unused
-                            colour = new Color32(158, 134, 17, (byte)mapAlphaChannel);
-                            break;
-
-                        case 25:    // Gen Rai Hammerfell village - unused
-                            colour = new Color32(158, 134, 17, (byte)mapAlphaChannel);
-                            break;
-
-                        case 26:    // The Orsinium Area
-                            colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
-                            break;
-
-                        case 27:    // Skeffington Wood - unused
-                            colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
-                            break;
-
-                        case 28:    // Hammerfell bay coast - unused
-                            colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
-                            break;
-
-                        case 29:    // Hammerfell sea coast - unused
-                            colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
-                            break;
-
-                        case 30:    // High Rock bay coast - unused
-                            colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
-                            break;
-
-                        case 31:    // High Rock sea coast
-                            colour = new Color32(0, 0, 0, 0);
-                            break;
-
-                        case 32:    // Northmoor
-                            colour = new Color32(127, 127, 127, (byte)mapAlphaChannel);
-                            break;
-
-                        case 33:    // Menevia
-                            colour = new Color32(229, 115, 39, (byte)mapAlphaChannel);
-                            break;
-
-                        case 34:    // Alcaire
-                            colour = new Color32(238, 90, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 35:    // Koegria
-                            colour = new Color32(0, 83, 165, (byte)mapAlphaChannel);
-                            break;
-
-                        case 36:    // Bhoriane
-                            colour = new Color32(255, 124, 237, (byte)mapAlphaChannel);
-                            break;
-
-                        case 37:    // Kambria
-                            colour = new Color32(0, 19, 127, (byte)mapAlphaChannel);
-                            break;
-
-                        case 38:    // Phrygias
-                            colour = new Color32(81, 46, 26, (byte)mapAlphaChannel);
-                            break;
-
-                        case 39:    // Urvaius
-                            colour = new Color32(12, 12, 12, (byte)mapAlphaChannel);
-                            break;
-
-                        case 40:    // Ykalon
-                            colour = new Color32(87, 0, 127, (byte)mapAlphaChannel);
-                            break;
-
-                        case 41:    // Daenia
-                            colour = new Color32(32, 142, 142, (byte)mapAlphaChannel);
-                            break;
-
-                        case 42:    // Shalgora
-                            colour = new Color32(202, 0, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 43:    // Abibon-Gora
-                            colour = new Color32(142, 74, 173, (byte)mapAlphaChannel);
-                            break;
-
-                        case 44:    // Kairou
-                            colour = new Color32(68, 27, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 45:    // Pothago
-                            colour = new Color32(207, 20, 43, (byte)mapAlphaChannel);
-                            break;
-
-                        case 46:    // Myrkwasa
-                            colour = new Color32(119, 108, 59, (byte)mapAlphaChannel);
-                            break;
-
-                        case 47:    // Ayasofya
-                            colour = new Color32(74, 35, 1, (byte)mapAlphaChannel);
-                            break;
-
-                        case 48:    // Tigonus
-                            colour = new Color32(255, 127, 127, (byte)mapAlphaChannel);
-                            break;
-
-                        case 49:    // Kozanset
-                            colour = new Color32(127, 127, 127, (byte)mapAlphaChannel);
-                            break;
-
-                        case 50:    // Satakalaam
-                            colour = new Color32(255, 46, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 51:    // Totambu
-                            colour = new Color32(193, 77, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 52:    // Mournoth
-                            colour = new Color32(153, 28, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 53:    // Ephesus
-                            colour = new Color32(253, 103, 0, (byte)mapAlphaChannel);
-                            break;
-
-                        case 54:    // Santaki
-                            colour = new Color32(1, 255, 144, (byte)mapAlphaChannel);
-                            break;
-
-                        case 55:    // Antiphyllos
-                            colour = new Color32(229, 182, 64, (byte)mapAlphaChannel);
-                            break;
-
-                        case 56:    // Bergama
-                            colour = new Color32(196, 169, 37, (byte)mapAlphaChannel);
-                            break;
-
-                        case 57:    // Gavaudon
-                            colour = new Color32(240, 8, 47, (byte)mapAlphaChannel);
-                            break;
-
-                        case 58:    // Tulune
-                            colour = new Color32(0, 73, 126, (byte)mapAlphaChannel);
-                            break;
-
-                        case 59:    // Glenumbra Moors
-                            colour = new Color32(15, 0, 61, (byte)mapAlphaChannel);
-                            break;
-
-                        case 60:    // Ilessan Hills
-                            colour = new Color32(236, 42, 50, (byte)mapAlphaChannel);
-                            break;
-
-                        case 61:    // Cybiades
-                            colour = new Color32(255, 255, 255, (byte)mapAlphaChannel);
-                            break;
-
-                        case -1:
-                        default:
-                            colour = new Color32(0, 0, 0, 0);
-                            break;
+                        colours[offset] = paintBrush;
                     }
-                    colours[offset] = colour;
+                    else{
+                        colour = GetRegionColour(value);
+                        colours[offset] = colour;
+                    }
                 }
             }
             return colours;
+        }
+
+        public static Color32 GetRegionColour(int index)
+        {
+            Color32 colour = new Color32();
+
+            if (index == 31)
+            {
+                colour = new Color32(0, 0, 0, 0);
+                return colour;
+            }
+
+            index = index % 10;
+
+            switch (index)
+            {
+                case 0:     // The Alik'r Desert
+                    colour = new Color32(236, 42, 50, (byte)mapAlphaChannel);
+                    break;
+
+                case 1:     // The Dragontail Mountains
+                    colour = new Color32(149, 43, 29, (byte)mapAlphaChannel);
+                    break;
+
+                // case 2:     // Glenpoint Foothills - unused
+                //     colour = new Color32(123, 156, 118, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 3:     // Daggerfall Bluffs - unused
+                //     colour = new Color32(107, 144, 109, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 4:     // Yeorth Burrowland - unused
+                //     colour = new Color32(93, 130, 94, (byte)mapAlphaChannel);
+                //     break;
+
+                case 2:     // Dwynnen
+                    colour = new Color32(212, 180, 105, (byte)mapAlphaChannel);
+                    break;
+
+                // case 6:     // Ravennian Forest - unused
+                //     colour = new Color32(77, 110, 78, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 7:     // Devilrock - unused
+                //     colour = new Color32(68, 99, 67, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 8:     // Malekna Forest - unused
+                //     colour = new Color32(61, 89, 53, (byte)mapAlphaChannel);
+                //     break;
+
+                case 3:     // The Isle of Balfiera
+                    colour = new Color32(158, 0, 0, (byte)mapAlphaChannel);
+                    break;
+
+                // case 10:    // Bantha - unused
+                //     colour = new Color32(34, 51, 34, (byte)mapAlphaChannel);
+                //     break;
+
+                case 4:    // Dak'fron
+                    colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
+                    break;
+
+                // case 12:    // The Islands in the Western Iliac Bay - unused
+                //     colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 13:    // Tamarilyn Point - unused
+                //     colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 14:    // Lainlyn Cliffs - unused
+                //     colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 15:    // Bjoulsae River - unused
+                //     colour = new Color32(36, 116, 84, (byte)mapAlphaChannel);
+                //     break;
+
+                case 5:    // The Wrothgarian Mountains
+                    colour = new Color32(250, 201, 11, (byte)mapAlphaChannel);
+                    break;
+
+                case 6:    // Daggerfall
+                    colour = new Color32(0, 126, 13, (byte)mapAlphaChannel);
+                    break;
+
+                case 7:    // Glenpoint
+                    colour = new Color32(152, 152, 152, (byte)mapAlphaChannel);
+                    break;
+
+                case 8:    // Betony
+                    colour = new Color32(31, 55, 132, (byte)mapAlphaChannel);
+                    break;
+
+                case 9:    // Sentinel
+                    colour = new Color32(158, 134, 17, (byte)mapAlphaChannel);
+                    break;
+
+                // case 21:    // Anticlere
+                //     colour = new Color32(30, 30, 30, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 22:    // Lainlyn
+                //     colour = new Color32(38, 127, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 23:    // Wayrest
+                //     colour = new Color32(0, 248, 255, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 24:    // Gen Tem High Rock village - unused
+                //     colour = new Color32(158, 134, 17, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 25:    // Gen Rai Hammerfell village - unused
+                //     colour = new Color32(158, 134, 17, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 26:    // The Orsinium Area
+                //     colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 27:    // Skeffington Wood - unused
+                //     colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 28:    // Hammerfell bay coast - unused
+                //     colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 29:    // Hammerfell sea coast - unused
+                //     colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 30:    // High Rock bay coast - unused
+                //     colour = new Color32(0, 99, 46, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 31:    // High Rock sea coast
+                //     colour = new Color32(0, 0, 0, 0);
+                //     break;
+
+                // case 32:    // Northmoor
+                //     colour = new Color32(127, 127, 127, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 33:    // Menevia
+                //     colour = new Color32(229, 115, 39, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 34:    // Alcaire
+                //     colour = new Color32(238, 90, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 35:    // Koegria
+                //     colour = new Color32(0, 83, 165, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 36:    // Bhoriane
+                //     colour = new Color32(255, 124, 237, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 37:    // Kambria
+                //     colour = new Color32(0, 19, 127, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 38:    // Phrygias
+                //     colour = new Color32(81, 46, 26, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 39:    // Urvaius
+                //     colour = new Color32(246, 207, 74, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 40:    // Ykalon
+                //     colour = new Color32(87, 0, 127, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 41:    // Daenia
+                //     colour = new Color32(32, 142, 142, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 42:    // Shalgora
+                //     colour = new Color32(202, 0, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 43:    // Abibon-Gora
+                //     colour = new Color32(142, 74, 173, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 44:    // Kairou
+                //     colour = new Color32(68, 27, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 45:    // Pothago
+                //     colour = new Color32(207, 20, 43, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 46:    // Myrkwasa
+                //     colour = new Color32(119, 108, 59, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 47:    // Ayasofya
+                //     colour = new Color32(74, 35, 1, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 48:    // Tigonus
+                //     colour = new Color32(255, 127, 127, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 49:    // Kozanset
+                //     colour = new Color32(127, 127, 127, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 50:    // Satakalaam
+                //     colour = new Color32(255, 46, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 51:    // Totambu
+                //     colour = new Color32(193, 77, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 52:    // Mournoth
+                //     colour = new Color32(153, 28, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 53:    // Ephesus
+                //     colour = new Color32(253, 103, 0, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 54:    // Santaki
+                //     colour = new Color32(1, 255, 144, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 55:    // Antiphyllos
+                //     colour = new Color32(229, 182, 64, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 56:    // Bergama
+                //     colour = new Color32(196, 169, 37, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 57:    // Gavaudon
+                //     colour = new Color32(240, 8, 47, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 58:    // Tulune
+                //     colour = new Color32(0, 73, 126, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 59:    // Glenumbra Moors
+                //     colour = new Color32(15, 0, 61, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 60:    // Ilessan Hills
+                //     colour = new Color32(236, 42, 50, (byte)mapAlphaChannel);
+                //     break;
+
+                // case 61:    // Cybiades
+                //     colour = new Color32(255, 255, 255, (byte)mapAlphaChannel);
+                //     break;
+
+                // case -1:
+                default:
+                    colour = new Color32(0, 0, 0, 0);
+                    break;
+            }
+
+            return colour;
         }
 
         public static int ConvertRegionIndexToPoliticIndex(int regionIndex)
@@ -1532,11 +2388,14 @@ namespace MapEditor
         public static DFLocation GetDFLocationFromPixelData(PixelData sourcePixel)
         {
             DFLocation createdLocation = new DFLocation();
-            createdLocation.Loaded = false;
+
+            sourcePixel = ConsolidateLocDimension(sourcePixel);
+
+            createdLocation.Loaded = true;
             createdLocation.Name = sourcePixel.Name;
             createdLocation.RegionName = sourcePixel.RegionName;
 
-            if (sourcePixel.DungeonType == 255)
+            if (sourcePixel.DungeonType == 255 || sourcePixel.DungeonType >= Enum.GetNames(typeof(DFRegion.DungeonTypes)).Length)
                 createdLocation.HasDungeon = false;
             else createdLocation.HasDungeon = true;
 
@@ -1546,18 +2405,29 @@ namespace MapEditor
             createdLocation.MapTableData.LocationType = (DFRegion.LocationTypes)sourcePixel.LocationType;
             createdLocation.MapTableData.DungeonType = (DFRegion.DungeonTypes)sourcePixel.DungeonType;
             createdLocation.MapTableData.Discovered = false;
-            createdLocation.MapTableData.Key = 0;
+            createdLocation.MapTableData.Key = (uint)sourcePixel.Key;
             createdLocation.Exterior.RecordElement.Header.X = sourcePixel.exterior.X;
             createdLocation.Exterior.RecordElement.Header.Y = sourcePixel.exterior.Y;
             createdLocation.Exterior.RecordElement.Header.IsExterior = 32768; // TODO: must check what this does
             createdLocation.Exterior.RecordElement.Header.Unknown2 = 0; // TODO: must check what this does
-            createdLocation.Exterior.RecordElement.Header.LocationId = (ushort)GenerateNewLocationId();
+
+            if (sourcePixel.exterior.LocationId != 0)
+                createdLocation.Exterior.RecordElement.Header.LocationId = (ushort)sourcePixel.exterior.LocationId;
+            else createdLocation.Exterior.RecordElement.Header.LocationId = (ushort)GenerateNewLocationId();
             createdLocation.Exterior.RecordElement.Header.IsInterior = 0; // TODO: must check what this does
             createdLocation.Exterior.RecordElement.Header.ExteriorLocationId = 0;
             createdLocation.Exterior.RecordElement.Header.LocationName = sourcePixel.Name;
-            createdLocation.Exterior.BuildingCount = GetBuildingCount(sourcePixel);
+            createdLocation.Exterior.BuildingCount = (ushort)sourcePixel.exterior.BuildingCount;
             createdLocation.Exterior.Buildings = new DFLocation.BuildingData[createdLocation.Exterior.BuildingCount];
-            // createdLocation.Exterior.Buildings[x].NameSeed...
+            
+            for (int i = 0; i < createdLocation.Exterior.BuildingCount; i++)
+            {
+                createdLocation.Exterior.Buildings[i].NameSeed = (ushort)sourcePixel.exterior.buildings[i].NameSeed;
+                createdLocation.Exterior.Buildings[i].FactionId = (ushort)sourcePixel.exterior.buildings[i].FactionId;
+                createdLocation.Exterior.Buildings[i].Sector = (short)sourcePixel.exterior.buildings[i].Sector;
+                createdLocation.Exterior.Buildings[i].BuildingType = (DFLocation.BuildingTypes)sourcePixel.exterior.buildings[i].BuildingType;
+                createdLocation.Exterior.Buildings[i].Quality = (byte)sourcePixel.exterior.buildings[i].Quality;
+            }
             createdLocation.Exterior.ExteriorData.AnotherName = sourcePixel.Name;
             createdLocation.Exterior.ExteriorData.MapId = sourcePixel.MapId;
             createdLocation.Exterior.ExteriorData.LocationId = 0;
@@ -1567,9 +2437,11 @@ namespace MapEditor
             if (sourcePixel.exterior.PortTown)
                 createdLocation.Exterior.ExteriorData.PortTownAndUnknown = 1;
             else createdLocation.Exterior.ExteriorData.PortTownAndUnknown = 0;
+
+            createdLocation.Exterior.ExteriorData.BlockNames = new string[createdLocation.Exterior.ExteriorData.Width * createdLocation.Exterior.ExteriorData.Height];
             createdLocation.Exterior.ExteriorData.BlockNames = sourcePixel.exterior.BlockNames;
 
-            if (sourcePixel.DungeonType != 255)
+            if (sourcePixel.DungeonType != 255 && sourcePixel.DungeonType < (Enum.GetNames(typeof(DFRegion.DungeonTypes)).Length - 1))
             {
                 createdLocation.Dungeon.RecordElement.Header.X = sourcePixel.dungeon.X;
                 createdLocation.Dungeon.RecordElement.Header.Y = sourcePixel.dungeon.Y;
@@ -1580,9 +2452,11 @@ namespace MapEditor
                 createdLocation.Dungeon.RecordElement.Header.ExteriorLocationId = createdLocation.Exterior.RecordElement.Header.LocationId;
                 createdLocation.Dungeon.RecordElement.Header.LocationName = sourcePixel.Name;
                 createdLocation.Dungeon.Header.BlockCount = (ushort)sourcePixel.dungeon.BlockCount;
+                createdLocation.Dungeon.Blocks = new DFLocation.DungeonBlock[createdLocation.Dungeon.Header.BlockCount];
 
                 for (int i = 0; i < createdLocation.Dungeon.Header.BlockCount; i++)
                 {
+                    createdLocation.Dungeon.Blocks[i] = new DFLocation.DungeonBlock();
                     createdLocation.Dungeon.Blocks[i].X = (sbyte)sourcePixel.dungeon.blocks[i].X;
                     createdLocation.Dungeon.Blocks[i].Z = (sbyte)sourcePixel.dungeon.blocks[i].Z;
                     createdLocation.Dungeon.Blocks[i].IsStartingBlock = sourcePixel.dungeon.blocks[i].IsStartingBlock;
@@ -1605,7 +2479,25 @@ namespace MapEditor
                 createdLocation.Dungeon.Blocks = new DFLocation.DungeonBlock[0];
             }
 
+            createdLocation.Climate = SetClimate(sourcePixel.Climate + (int)MapsFile.Climates.Ocean);
+            createdLocation.Politic = sourcePixel.Politic;
+            createdLocation.RegionIndex = sourcePixel.RegionIndex;
+            createdLocation.LocationIndex = sourcePixel.LocationIndex;
+
             return createdLocation;
+        }
+
+        public static PixelData ConsolidateLocDimension(PixelData pixel)
+        {
+            string[] blockNames = new string[pixel.exterior.Width * pixel.exterior.Height];
+
+            for (int i = 0; i < blockNames.Length; i++)
+            {
+                blockNames[i] = pixel.exterior.BlockNames[i];
+            }
+            pixel.exterior.BlockNames = blockNames;
+
+            return pixel;
         }
 
         public static ulong GenerateNewLocationId()
@@ -1628,18 +2520,66 @@ namespace MapEditor
             return 0;
         }
 
-        public static ushort GetBuildingCount(PixelData pixel)
+        public static ushort GetBuildingCount(int width, int height, List<string> townBlocks)
         {
             DFBlock block;
-            int locDim = pixel.exterior.Width * pixel.exterior.Height;
+            int locDim = width * height;
             int buildCount = 0;
-            for (int i = 0; i < locDim; i++)
+            foreach (string tBlock in townBlocks)
             {
                 block = new DFBlock();
-                block = blockFileReader.GetBlock(pixel.exterior.BlockNames[i]);
-                buildCount += block.RmbBlock.FldHeader.BuildingDataList.Length;
+
+                if (tBlock != noBlock && tBlock != null)
+                {
+                    block = blockFileReader.GetBlock(tBlock);
+                    // int counter = 0;
+
+                    buildCount += block.RmbBlock.SubRecords.Length;
+
+                    // while (block.RmbBlock.FldHeader.BuildingDataList[counter].Quality != 0)
+                    // {
+                    //     buildCount++;
+                    //     counter++;
+                    // }
+                }
             }
-            return buildCount;
+            return (ushort)buildCount;
+        }
+
+        public static Buildings[] SetBuildings(PixelData pixel, List<string> blockNames)
+        {
+            DFBlock block;
+            Buildings[] buildings = new Buildings[pixel.exterior.buildings.Length];
+            List<Buildings> buildingList = new List<Buildings>();
+            foreach (string bNames in blockNames)
+            {
+                block = new DFBlock();
+
+                if (bNames != noBlock && bNames != null)
+                {
+                    block = blockFileReader.GetBlock(bNames);
+                    pixel.exterior.buildings = new Buildings[block.RmbBlock.SubRecords.Length];
+
+                    for (int j = 0; j < block.RmbBlock.SubRecords.Length; j++)
+                    {
+                        Buildings buildingElement = new Buildings();
+                        if (block.RmbBlock.FldHeader.BuildingDataList[j].NameSeed != 0)
+                            buildingElement.NameSeed = block.RmbBlock.FldHeader.BuildingDataList[j].NameSeed;
+                        else
+                        {
+                            UInt16 nameSeed = (ushort)UnityEngine.Random.Range(0, (UInt16.MaxValue + 1));
+                            buildingElement.NameSeed = nameSeed;
+                        }
+                        buildingElement.FactionId = block.RmbBlock.FldHeader.BuildingDataList[j].FactionId;
+                        buildingElement.Sector = block.RmbBlock.FldHeader.BuildingDataList[j].Sector;
+                        buildingElement.BuildingType = (int)block.RmbBlock.FldHeader.BuildingDataList[j].BuildingType;
+                        buildingElement.Quality = block.RmbBlock.FldHeader.BuildingDataList[j].Quality;
+                        buildingList.Add(buildingElement);
+                    }
+                }
+            }
+            buildings = buildingList.ToArray();
+            return buildings;
         }
 
         static GUIStyle SetGUIStyle()
@@ -1701,6 +2641,9 @@ namespace MapEditor
             if (mapImage)
                 numberOfChecks++;
 
+            if ((drawHeightmap || drawClimate || drawPolitics) && mapImage)
+                numberOfChecks = 4;
+
             if (numberOfChecks < 0 || numberOfChecks > 4)
             {
                 Debug.LogError("Invalid check count!");
@@ -1748,17 +2691,156 @@ namespace MapEditor
                     break;
 
                 case buttonZoomOut:
-                    position = new Rect(position.x, position.y, position.width * 2, position.height * 2);
+                    position = new Rect(position.x - position.width / 2, position.y - position.height / 2, position.width * 2, position.height * 2);
                     break;
 
                 case buttonZoomIn:
-                    position = new Rect(position.x, position.y, position.width / 2, position.height / 2);
+                    position = new Rect(position.x + position.width / 4, position.y + position.height / 4, position.width / 2, position.height / 2);
                     break;
 
                 default:
                     break;    
             }
+
             return position;
+        }
+
+        public static byte[] ConvertToGrayscale(int[,] map)
+        {
+            Texture2D grayscaleImage = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight);
+            Color32[] grayscaleMap = new Color32[map.Length];
+            byte[] grayscaleBuffer = new byte[map.Length * 4];
+            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            {
+                for (int y = 0; y < MapsFile.WorldHeight; y++)
+                {
+                    int offset = (((WorldInfo.WorldSetting.WorldHeight - y - 1) * WorldInfo.WorldSetting.WorldWidth) + x);
+                    int value = map[x, y];
+                    grayscaleMap[offset] = new Color32((byte)value, (byte)value, (byte)value, 255);
+                }
+            }
+            grayscaleImage.SetPixels32(grayscaleMap);
+            grayscaleImage.Apply();
+            grayscaleBuffer = ImageConversion.EncodeToPNG(grayscaleImage);
+
+            return grayscaleBuffer;
+        }
+
+        public static byte[] ConvertToGrayscale(byte[,] map)
+        {
+            Texture2D grayscaleImage = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight);
+            Color32[] grayscaleMap = new Color32[map.Length];
+            byte[] grayscaleBuffer = new byte[map.Length * 4];
+            for (int x = 0; x < MapsFile.WorldWidth; x++)
+            {
+                for (int y = 0; y < MapsFile.WorldHeight; y++)
+                {
+                    int offset = (((WorldInfo.WorldSetting.WorldHeight - y - 1) * WorldInfo.WorldSetting.WorldWidth) + x);
+                    int value = map[x, y];
+                    grayscaleMap[offset] = new Color32((byte)value, (byte)value, (byte)value, 255);
+                }
+            }
+            grayscaleImage.SetPixels32(grayscaleMap);
+            grayscaleImage.Apply();
+            grayscaleBuffer = ImageConversion.EncodeToPNG(grayscaleImage);
+
+            return grayscaleBuffer;
+        }
+
+        public static void ConvertToMatrix(Texture2D imageToTranslate, out int[,] matrix)
+        {
+            Color32[] grayscaleMap = imageToTranslate.GetPixels32();
+            // byte[] buffer = imageToTranslate.GetRawTextureData();
+            matrix = new int[imageToTranslate.width, imageToTranslate.height];
+            for (int x = 0; x < imageToTranslate.width; x++)
+            {
+                for (int y = 0; y < imageToTranslate.height; y++)
+                {
+                    int offset = (((imageToTranslate.height - y - 1) * imageToTranslate.width) + x);
+
+                    int value = 0;
+                    
+                    if (grayscaleMap[offset].g == grayscaleMap[offset].r && grayscaleMap[offset].g == grayscaleMap[offset].b)
+                        value = (int)grayscaleMap[offset].g;
+                    else if (grayscaleMap[offset].g == 255 && grayscaleMap[offset].b == 255)
+                        value = (int)grayscaleMap[offset].g + grayscaleMap[offset].r;
+                    else if (grayscaleMap[offset].r == 255 && grayscaleMap[offset].b == 255)
+                        value = (int)grayscaleMap[offset].g + 509;
+                    matrix[x, y] = value;
+                }
+            }
+        }
+
+        public static byte[,] ConvertToMatrix(Texture2D imageToTranslate)
+        {
+            Color32[] grayscaleMap = imageToTranslate.GetPixels32();
+            // byte[] buffer = imageToTranslate.GetRawTextureData();
+            byte[,] matrix = new byte[imageToTranslate.width, imageToTranslate.height];
+            for (int x = 0; x < imageToTranslate.width; x++)
+            {
+                for (int y = 0; y < imageToTranslate.height; y++)
+                {
+                    int offset = (((imageToTranslate.height - y - 1) * imageToTranslate.width) + x);
+                    byte value = grayscaleMap[offset].g;
+                    matrix[x, y] = value;
+                }
+            }
+            return matrix;
+        }
+
+        public static void InspectHeightmap(bool isLight)
+        {
+            string path = "/home/arneb/DFU_resources/Tamriel_Heightmap";
+            string mapToLoad;
+            topValue = 0;
+            bottomValue = byte.MaxValue;
+            Texture2D imageToTranslate = new Texture2D(1, 1);
+
+            if (isLight)
+            {
+                mapToLoad = "Tamriel_Light.png";
+            }
+            else
+            { 
+                mapToLoad = "Tamriel_Dark.png";
+            }
+
+            
+            // ImageConversion.LoadImage(imageToTranslate, File.ReadAllBytes(Path.Combine(path, mapToLoad)));            
+            // byte[,] heightMap = new byte [imageToTranslate.width, imageToTranslate.height];
+            // heightMap = MapEditor.ConvertToMatrix(imageToTranslate);
+
+            byte[] heightMap = new byte [20481 * 16385];
+            heightMap = File.ReadAllBytes(Path.Combine(path, "Tamriel_Light.data"));
+
+            // for (int x = 0; x < imageToTranslate.width; x++)
+            // {
+            //     for (int y = 0; y < imageToTranslate.height; y++)
+            //     {
+
+            for (int i = 0; i < heightMap.Length; i++)
+            {
+                byte analyzedPixel = heightMap[i];
+
+                if (analyzedPixel > topValue)
+                        topValue = analyzedPixel;
+
+                if (analyzedPixel < bottomValue)
+                        bottomValue = analyzedPixel;
+            }
+                    // byte analyzedPixel = heightMap[x, y];
+
+                    // if (analyzedPixel > topValue)
+                    //     topValue = analyzedPixel;
+
+                    // if (analyzedPixel < bottomValue)
+                    //     bottomValue = analyzedPixel;
+            //     }
+            // }
+
+            EditorGUILayout.LabelField("Map: ", mapToLoad, EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Highest Point: ", topValue.ToString());
+            EditorGUILayout.LabelField("Lowest Point", bottomValue.ToString());
         }
     }    
 
@@ -1823,6 +2905,9 @@ namespace MapEditor
         {
             DFRegion dfRegion = new DFRegion();
 
+            if (currentRegionIndex >= Worldmaps.Worldmap.Length)
+                return dfRegion;
+
             dfRegion.Name = Worldmaps.Worldmap[currentRegionIndex].Name;
             dfRegion.LocationCount = Worldmaps.Worldmap[currentRegionIndex].LocationCount;
             dfRegion.MapNames = Worldmaps.Worldmap[currentRegionIndex].MapNames;
@@ -1843,6 +2928,7 @@ namespace MapEditor
         {
             // Read location
             DFLocation dfLocation = new DFLocation();
+            Debug.Log("Getting location from region " + region + ", location n." + location);
             dfLocation = Worldmaps.Worldmap[region].Locations[location];
 
             // Store indices
@@ -1929,7 +3015,7 @@ namespace MapEditor
         public static int GetRegionIndex(string name)
         {
             // Search for region name
-            for (int i = 0; i < MapsFile.TempRegionCount; i++)
+            for (int i = 0; i < WorldInfo.WorldSetting.Regions; i++)
             {
                 if (Worldmaps.Worldmap[i].Name == name)
                     return i;
@@ -2038,7 +3124,7 @@ namespace MapEditor
             // locationIdToMapIdDict = new Dictionary<ulong, ulong>();
             locationIdList = new List<ulong>();
 
-            for (int region = 0; region < MapsFile.TempRegionCount; region++)
+            for (int region = 0; region < WorldInfo.WorldSetting.Regions; region++)
             {
                 DFRegion dfRegion = Worldmaps.ConvertWorldMapsToDFRegion(region);
                 for (int location = 0; location < dfRegion.LocationCount; location++)
@@ -2060,7 +3146,7 @@ namespace MapEditor
 
                     mapDictSwap.Add(summary.ID, summary);
 
-                    // Link locationId with mapId - adds ~25ms overhead
+                    // Link generatedLocation.MapTableData with mapId - adds ~25ms overhead
                     // ulong locationId = WorldMaps.ReadLocationIdFast(region, location);
                     // locationIdToMapIdDict.Add(locationId, summary.ID);
                 }
@@ -2110,7 +3196,9 @@ namespace MapEditor
 
         static ClimateInfo()
         {
-            Climate = JsonConvert.DeserializeObject<int[,]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "Climate.json")));
+            Texture2D imageToTranslate = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight);
+            ImageConversion.LoadImage(imageToTranslate, File.ReadAllBytes(Path.Combine(MapEditor.testPath, "Climate.png")));            
+            MapEditor.ConvertToMatrix(imageToTranslate, out Climate);
         }
 
         public static int[,] ClimateModified;
@@ -2126,7 +3214,9 @@ namespace MapEditor
 
         static PoliticInfo()
         {
-            Politic = JsonConvert.DeserializeObject<int[,]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "Politic.json")));
+            Texture2D imageToTranslate = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight);
+            ImageConversion.LoadImage(imageToTranslate, File.ReadAllBytes(Path.Combine(MapEditor.testPath, "Politic.png")));            
+            MapEditor.ConvertToMatrix(imageToTranslate, out Politic);
         }
 
         #endregion
@@ -2144,7 +3234,7 @@ namespace MapEditor
                     int X = x + i;
                     int Y = y + j;
 
-                    if ((X < 0 || X > MapsFile.WorldWidth || Y < 0 || Y > MapsFile.WorldHeight) ||
+                    if ((X < 0 || X > WorldInfo.WorldSetting.WorldWidth || Y < 0 || Y > WorldInfo.WorldSetting.WorldHeight) ||
                         (i == 0 && j == 0))
                         continue;
 
@@ -2163,8 +3253,8 @@ namespace MapEditor
         {
             int regionIndex = Politic[x, y];
 
-            if (regionIndex == 64)
-                return regionIndex;
+            if (regionIndex == 0 || regionIndex < 128)
+                return 31;
 
             regionIndex -= 128;
             return regionIndex;
@@ -2181,7 +3271,10 @@ namespace MapEditor
 
         static SmallHeightmap()
         {
-            Woods = JsonConvert.DeserializeObject<byte[,]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "Woods.json")));
+            Texture2D imageToTranslate = new Texture2D(MapsFile.WorldWidth, MapsFile.WorldHeight);
+            ImageConversion.LoadImage(imageToTranslate, File.ReadAllBytes(Path.Combine(MapEditor.testPath, "Woods.png")));            
+            Woods = MapEditor.ConvertToMatrix(imageToTranslate);
+            // Woods = JsonConvert.DeserializeObject<byte[,]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "Woods.json")));
         }
 
         #endregion
@@ -2205,15 +3298,197 @@ namespace MapEditor
         {
             // Clamp X
             if (mapPixelX < 0) mapPixelX = 0;
-            if (mapPixelX >= MapsFile.WorldWidth) mapPixelX = MapsFile.WorldWidth - 1;
+            if (mapPixelX >= WorldInfo.WorldSetting.WorldWidth) mapPixelX = WorldInfo.WorldSetting.WorldWidth - 1;
 
             // Clamp Y
             if (mapPixelY < 0) mapPixelY = 0;
-            if (mapPixelY >= MapsFile.WorldHeight) mapPixelY = MapsFile.WorldHeight - 1;
+            if (mapPixelY >= WorldInfo.WorldSetting.WorldHeight) mapPixelY = WorldInfo.WorldSetting.WorldHeight - 1;
 
             return Woods[mapPixelX, mapPixelY];
         }
 
         #endregion
+    }
+
+    public static class WorldInfo
+    {
+        public static WorldStats WorldSetting;
+
+        static WorldInfo()
+        {
+            WorldSetting = new WorldStats();
+            WorldSetting = JsonConvert.DeserializeObject<WorldStats>(File.ReadAllText(Path.Combine(MapEditor.testPath, "WorldData.json")));
+        }
+    }
+
+    public class WorldStats
+    {
+        public int Regions;
+        public string[] RegionNames;
+        public int WorldWidth;
+        public int WorldHeight;
+        public int[] regionRaces;
+        public int[] regionTemples;
+        public int[] regionBorders;
+
+        public WorldStats()
+        {
+            
+        }
+    }
+
+    public static class FactionAtlas
+    {
+        public static Dictionary<int, FactionFile.FactionData> FactionDictionary = new Dictionary<int, FactionFile.FactionData>();
+        public static Dictionary<string, int> FactionToId = new Dictionary<string, int>();
+
+        static FactionAtlas()
+        {
+            FactionDictionary = JsonConvert.DeserializeObject<Dictionary<int, FactionFile.FactionData>>(File.ReadAllText(Path.Combine(MapEditor.testPath, "Faction.json")));
+
+            foreach (KeyValuePair<int, FactionFile.FactionData> faction in FactionDictionary)
+            {
+                if (!FactionToId.ContainsKey(faction.Value.name))
+                    FactionToId.Add(faction.Value.name, faction.Key);
+                else {
+                    FactionToId.Add(faction.Value.name + "_(" + ((FactionFile.FactionIDs)faction.Value.parent).ToString() + ")", faction.Key);
+                    int indexSwap = FactionToId[faction.Value.name];
+                    FactionFile.FactionData factionSwap = FactionDictionary[indexSwap];
+                    FactionToId.Remove(faction.Value.name);
+                    FactionToId.Add(factionSwap.name + "_(" + ((FactionFile.FactionIDs)factionSwap.parent).ToString() + ")", indexSwap);
+                }
+            }
+        }
+
+        public static bool GetFactionData(int factionID, out FactionFile.FactionData factionDataOut)
+        {
+            factionDataOut = new FactionFile.FactionData();
+            if (FactionAtlas.FactionDictionary.ContainsKey(factionID))
+            {
+                factionDataOut = FactionAtlas.FactionDictionary[factionID];
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    public static class LocationNamesList
+    {
+        public enum NameTypes
+        {
+            HighRockVanilla,
+            HighRockModern,
+            Hammerfell,
+            Skyrim,
+            Reachmen,
+            Morrowind,            
+        }
+
+        public enum NameParts
+        {
+            Prefix = 0,
+            Suffix1 = 1,
+            Suffix2 = 2,
+            Extra = 3,
+        }
+
+        public enum PoorHomeEpithets
+        {
+            Cabin,
+            Hovel,
+            Place,
+            Shack,
+        }
+
+        public enum WealthyHomeEpithets
+        {
+            
+            Court,            
+            Hall,            
+            Manor,            
+            Palace,
+        }
+
+        public enum FarmsteadEpithets
+        {
+            Farm,
+            Farmstead,
+            Grange,
+            Orchard,
+            Plantation,
+        }
+
+        public enum TavernEpithets
+        {
+            Hostel,
+            Inn,
+            Lodge,
+            Pub,
+            Tavern
+        }
+
+        public enum TempleParts
+        {
+            Deity,
+            Adjectif,
+            Noun,
+            Shrine
+        }
+
+        public enum RMBTypes
+        {
+            Town,
+            Dungeon,
+            Home,
+            Knight,
+            Special
+        }
+
+        public enum RDBTypes
+        {
+            Castle,
+            Tower,
+            HarpyNest,
+            BugsNest,
+            Cave,
+            Mine,
+            Haunt,
+            Coven,
+            Laboratory,
+            Temple,
+            Crypt,
+            Prison,
+            Ruins,
+            DragonsDen,
+            VolcanicCaves,
+            Cemetery,
+            Generic,
+            Border
+        }
+
+        public static string[][][] NamesList;
+        public static string[][] DungeonNamesList;
+        public static string[][] TempleNamesList;
+        public static string[][] RMBNames;
+        public static string[][] RDBNames;
+
+        static LocationNamesList()
+        {
+            NamesList = new string[Enum.GetNames(typeof(NameTypes)).Length][][];
+            NamesList = JsonConvert.DeserializeObject<string[][][]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "LocationNames.json")));
+
+            DungeonNamesList = new string[Enum.GetNames(typeof(DFRegion.DungeonTypes)).Length][];
+            DungeonNamesList = JsonConvert.DeserializeObject<string[][]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "DungeonEpithets.json")));
+
+            TempleNamesList = new string[Enum.GetNames(typeof(TempleParts)).Length][];
+            TempleNamesList = JsonConvert.DeserializeObject<string[][]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "TempleEpithets.json")));
+
+            RMBNames = new string[Enum.GetNames(typeof(RMBTypes)).Length][];
+            RMBNames = JsonConvert.DeserializeObject<string[][]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "RMBlocks.json")));
+
+            RDBNames = new string[Enum.GetNames(typeof(RDBTypes)).Length][];
+            RDBNames = JsonConvert.DeserializeObject<string[][]>(File.ReadAllText(Path.Combine(MapEditor.testPath, "DungeonRDBs.json")));
+        }
     }
 }

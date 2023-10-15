@@ -79,6 +79,7 @@ namespace MapEditor
 
     public class Exterior
     {
+        public string AnotherName;
         public int X;
         public int Y;
         public int LocationId;
@@ -92,6 +93,7 @@ namespace MapEditor
 
         public void GetExteriorData(int x, int y, int regionIndex, int mapIndex)
         {
+            AnotherName = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Exterior.ExteriorData.AnotherName;
             X = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Exterior.RecordElement.Header.X;
             Y = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Exterior.RecordElement.Header.Y;
             LocationId = (int)Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Exterior.RecordElement.Header.LocationId;
@@ -143,6 +145,7 @@ namespace MapEditor
         public int X;
         public int Y;
         public int LocationId;
+        public string DungeonName;
         public int BlockCount;
         public Blocks[] blocks;
 
@@ -151,6 +154,7 @@ namespace MapEditor
             X = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Dungeon.RecordElement.Header.X;
             Y = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Dungeon.RecordElement.Header.Y;
             LocationId = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Dungeon.RecordElement.Header.LocationId;
+            DungeonName = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Dungeon.RecordElement.Header.LocationName;
             BlockCount = Worldmaps.Worldmap[regionIndex].Locations[mapIndex].Dungeon.Header.BlockCount;
 
             if (BlockCount > 0)
