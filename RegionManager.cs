@@ -552,14 +552,6 @@ namespace MapEditor
         static int newRegionIndex;
         static int tempDeity;
 
-        public enum TownShapes
-        {
-            Regular = 0,
-            SmallL = 1,
-            FourOnSix = 2,
-            FiveOnSix = 3,
-        }
-
         void Awake()
         {
             newRegionData = new RegionManager.RegionData();
@@ -818,6 +810,19 @@ namespace MapEditor
             //     locationDensity = new float[(int)(DFRegion.LocationTypes.TownCity)];
             //     includeCapital = false;
             // }
+        }
+
+        public enum TownShapes
+        {
+            Regular = 0,
+            LShape = 1,
+            FourOnSix = 2,
+            FiveOnSix = 3,
+            SixOnEight = 4,
+            MantaShape = 5,
+            EightOnNine = 6,
+            NineOnTwelve = 7,
+            TwelveOnSixteen = 8,
         }
 
         void Awake()
@@ -2982,22 +2987,21 @@ namespace MapEditor
             generatedLocation.RegionName = WorldInfo.WorldSetting.RegionNames[RegionManager.currentRegionIndex];
             generatedLocation.HasDungeon = false;
 
-            int townWidth;
-            int townHeight;
+            (int, int, int) townShape;
 
-            GenerateTownSize(locationType, out townWidth, out townHeight);
+            GenerateTownSize(locationType, out townShape);
             
             generatedLocation.MapTableData.MapId = (ulong)(position.Y * WorldInfo.WorldSetting.WorldWidth + position.X);
-            generatedLocation.MapTableData.Latitude = SetLocationLongitudeLatitude(position.X, position.Y, townWidth, townHeight, false);
-            generatedLocation.MapTableData.Longitude = SetLocationLongitudeLatitude(position.X, position.Y, townWidth, townHeight, true);
+            generatedLocation.MapTableData.Latitude = SetLocationLongitudeLatitude(position.X, position.Y, townShape.Item1, townShape.Item2, false);
+            generatedLocation.MapTableData.Longitude = SetLocationLongitudeLatitude(position.X, position.Y, townShape.Item1, townShape.Item2, true);
             generatedLocation.MapTableData.LocationType = (DFRegion.LocationTypes)locationType;
             generatedLocation.MapTableData.DungeonType = DFRegion.DungeonTypes.NoDungeon;
             generatedLocation.MapTableData.Discovered = false;
             generatedLocation.MapTableData.Key = 0;
             generatedLocation.MapTableData.LocationId = GenerateNewLocationId();
 
-            generatedLocation.Exterior.RecordElement.Header.X = SetPixelXY(position.X, position.Y, townWidth, townHeight, true);
-            generatedLocation.Exterior.RecordElement.Header.Y = SetPixelXY(position.X, position.Y, townWidth, townHeight, false);
+            generatedLocation.Exterior.RecordElement.Header.X = SetPixelXY(position.X, position.Y, townShape.Item1, townShape.Item2, true);
+            generatedLocation.Exterior.RecordElement.Header.Y = SetPixelXY(position.X, position.Y, townShape.Item1, townShape.Item2, false);
             generatedLocation.Exterior.RecordElement.Header.IsExterior = 32768;
             generatedLocation.Exterior.RecordElement.Header.Unknown2 = 0;
             generatedLocation.Exterior.RecordElement.Header.LocationId = generatedLocation.MapTableData.LocationId;
@@ -3007,24 +3011,22 @@ namespace MapEditor
 
             generatedLocation.Exterior.ExteriorData.MapId = generatedLocation.MapTableData.MapId;
             generatedLocation.Exterior.ExteriorData.LocationId = generatedLocation.MapTableData.LocationId;
-            generatedLocation.Exterior.ExteriorData.Width = (byte)townWidth;
-            generatedLocation.Exterior.ExteriorData.Height = (byte)townHeight;
+            generatedLocation.Exterior.ExteriorData.Width = (byte)townShape.Item1;
+            generatedLocation.Exterior.ExteriorData.Height = (byte)townShape.Item2;
 
             if (locationType != (int)DFRegion.LocationTypes.TownVillage)
                 generatedLocation.Exterior.ExteriorData.PortTownAndUnknown = DetermineIfPortTown(position.X, position.Y);
             else generatedLocation.Exterior.ExteriorData.PortTownAndUnknown = 0;
 
-            generatedLocation.Exterior.ExteriorData.BlockNames = new string[townWidth * townHeight];
+            generatedLocation.Exterior.ExteriorData.BlockNames = new string[townShape.Item1 * townShape.Item2];
 
-            if (locationType == (int)DFRegion.LocationTypes.TownCity && (DetermineIfWalled(townWidth, townHeight)))
+            if (locationType == (int)DFRegion.LocationTypes.TownCity && (DetermineIfWalled(townShape.Item1, townShape.Item2)))
             {
                 generatedLocation.Exterior.ExteriorData.Width += 2;
                 generatedLocation.Exterior.ExteriorData.Height += 2;
-                generatedLocation.Exterior.ExteriorData.BlockNames = PickBlockNames(locationType, townWidth, townHeight, generatedLocation.Exterior.ExteriorData.BlockNames.Length, position, true);
+                generatedLocation.Exterior.ExteriorData.BlockNames = PickBlockNames(locationType, townShape, generatedLocation.Exterior.ExteriorData.BlockNames.Length, position, true);
             }
-            else 
-            
-            generatedLocation.Exterior.ExteriorData.BlockNames = PickBlockNames(locationType, townWidth, townHeight, generatedLocation.Exterior.ExteriorData.BlockNames.Length, position);
+            else generatedLocation.Exterior.ExteriorData.BlockNames = PickBlockNames(locationType, townShape, generatedLocation.Exterior.ExteriorData.BlockNames.Length, position);
 
             generatedLocation.Exterior.BuildingCount = (ushort)CountBuildings(generatedLocation.Exterior.ExteriorData.BlockNames);
 
@@ -3032,7 +3034,7 @@ namespace MapEditor
 
             int buildingCount = 0;
 
-            for (int j = 0; j < townWidth * townHeight; j++)
+            for (int j = 0; j < townShape.Item1 * townShape.Item2; j++)
             {
                 string blockReplacementJson = File.ReadAllText(Path.Combine(MapEditor.testPath, "RMB", string.Concat(generatedLocation.Exterior.ExteriorData.BlockNames[j], ".json")));
                 DFBlock block = (DFBlock)SaveLoadManager.Deserialize(typeof(DFBlock), blockReplacementJson);
@@ -3064,21 +3066,21 @@ namespace MapEditor
             return generatedLocation;
         }
 
-        protected void GenerateTownSize(int locationType, out int width, out int height)
+        protected void GenerateTownSize(int locationType, out (int, int, int) refinedSize)
         {
-            int townSize;
-            int townSurface;
             int scalableWidth;
             int scalableHeight;
+            int width;
+            int height;
 
-            int lowLimit = 2;
-            int middleLimit = 4;
-            int highLimit = 9;
+            // int lowLimit = 2;
+            // int middleLimit = 4;
+            // int highLimit = 9;
 
-            int minLimit;
-            int maxLimit;
+            // int minLimit;
+            // int maxLimit;
 
-            (int, int, int) refinedSize;
+            // (int, int, int) refinedSize;
 
             scalableWidth = UnityEngine.Random.Range(0, 100) + 1;
             scalableHeight = UnityEngine.Random.Range(0, 100) + 1;
@@ -3088,15 +3090,78 @@ namespace MapEditor
 
             switch (locationType)
             {
-                case (int)DFRegion.LocationTypes.TownCity:
-                    break;
-
-                case (int)DFRegion.LocationTypes.TownHamlet:
-                    break;
-
                 case (int)DFRegion.LocationTypes.TownVillage:
                     refinedSize = RefineVillageSize(width, height);
                     break;
+
+                 case (int)DFRegion.LocationTypes.TownHamlet:
+                    refinedSize = RefineHamletSize(width, height);
+                    break;
+
+                case (int)DFRegion.LocationTypes.TownCity:
+                default:
+                    refinedSize = (width, height, (int)TownShapes.Regular);
+                    break;
+            }
+        }
+
+        protected (int, int, int) RefineHamletSize(int width, int height)
+        {
+            int randomChance = UnityEngine.Random.Range(0, 100) + 1;
+            switch (width * height)
+            {
+                case 4:     // 5 blocks is the smallest hamlet possible
+                    if (randomChance <= 50)
+                        width++;
+                    else height++;
+
+                    return (width, height, (int)TownShapes.FiveOnSix);
+
+                case 6:     // There's a small chance a 6 blocks hamlet will have a peculiar shape
+                    if (randomChance > 95)
+                    {
+                        if (UnityEngine.Random.Range(0, 2) == 0)
+                            width++;
+                        else height++;
+
+                        if (Math.Abs(width - height) == 2)
+                            return (width, height, (int)TownShapes.SixOnEight);
+                        else return (width, height, (int)TownShapes.MantaShape);
+                    }
+                    else return (width, height, (int)TownShapes.Regular);                    
+
+                case 8:     // 4 x 2 blocks hamlet should be rare, 4 out of 5 times it's a 3 x 3 with a FILL
+                    if (randomChance <= 80)
+                    {
+                        return (3, 3, (int)TownShapes.EightOnNine);
+                    }
+                    else return (width, height, (int)TownShapes.Regular);
+
+                case 9:     // 3 x 3 blocks hamlet are usually just square towns, but there's a small chance it will be a 4 x 3 with 3 FILL
+                    if (randomChance <= 80)
+                    {
+                        return (3, 3, (int)TownShapes.Regular);
+                    }
+                    else{
+                        if (UnityEngine.Random.Range(0, 2) == 0)
+                            width++;
+                        else height++;
+
+                        return (width, height, (int)TownShapes.NineOnTwelve);
+                    }
+                
+                case 12:    // 3 x 4 blocks hamlet have a small chance to be wider, but with 4 FILL
+                    if (randomChance <= 80)
+                    {
+                        return (width, height, (int)TownShapes.Regular);
+                    }
+                    else return (4, 4, (int)TownShapes.TwelveOnSixteen);
+
+                case 16:    // max blocks for hamlets are 12, therefore a 4 x 4 hamlet has always 4 FILL
+                    return (width, height, (int)TownShapes.TwelveOnSixteen);
+
+                default:
+                    return (width, height, (int)TownShapes.Regular);
             }
         }
 
@@ -3109,27 +3174,27 @@ namespace MapEditor
                         width++;
                     else height++;
 
-                    return (width, height, (int)NewRegionWindow.TownShapes.Regular);
+                    return (width, height, (int)TownShapes.Regular);
 
                 case 3:     // 3 x 1 settlements should be rare, 4 out of 5 times it's a 2 x 2 with a FILL
                     if (UnityEngine.Random.Range(0, 5) < 4)
                     {
-                        return (2, 2, (int)NewRegionWindow.TownShapes.SmallL);
+                        return (2, 2, (int)TownShapes.LShape);
                     }
-                    else return (width, height, (int)NewRegionWindow.TownShapes.Regular);
+                    else return (width, height, (int)TownShapes.Regular);
 
                 case 6:     // 4 should be the top limit blocks for villages
-                    return (width, height, (int)NewRegionWindow.TownShapes.FourOnSix);
+                    return (width, height, (int)TownShapes.FourOnSix);
 
-                case 9:
+                case 9:     // 3 x 3 is reduced to a 3 x 2, as above
                     if (UnityEngine.Random.Range(0, 2) == 0)
                         width--;
                     else height --;
 
-                    return (width, height, (int)NewRegionWindow.TownShapes.FourOnSix);
+                    return (width, height, (int)TownShapes.FourOnSix);
 
                 default:
-                    return (width, height, (int)NewRegionWindow.TownShapes.Regular);
+                    return (width, height, (int)TownShapes.Regular);
             }
         }
 
@@ -3461,12 +3526,14 @@ namespace MapEditor
             return false;
         }
 
-        protected string[] PickBlockNames(int locationTypes, int width, int height, int locationSize, DFPosition position, bool walled = false, string specialCondition = "")
+        protected string[] PickBlockNames(int locationTypes, (int, int, int) townShape, int locationSize, DFPosition position, bool walled = false, string specialCondition = "")
         {
             List<string> blocks = new List<string>();
             List<(int, int, string)> cityCorners = new List<(int, int, string)>();
-            if (locationTypes == (int)DFRegion.LocationTypes.TownCity)
-                cityCorners = CalculateWallPosition(width, height);
+            List<(int, int, string)> specialBlocks = new List<(int, int, string)>();
+            if (locationTypes == (int)DFRegion.LocationTypes.TownCity && walled)
+                cityCorners = CalculateWallPosition(townShape.Item1, townShape.Item2);
+            specialBlocks = DetermineSpecialBlocksSetting(townShape);
 
             string climateChar = GetClimateChar(position);
             string sizeChar;
@@ -3488,7 +3555,7 @@ namespace MapEditor
                         {
                             foreach ((int, int, string) wallPiece in cityCorners)
                             {
-                                if ((wallPiece.Item2 * width + wallPiece.Item1) == i)
+                                if ((wallPiece.Item2 * townShape.Item1 + wallPiece.Item1) == i)
                                 {
                                     blocks.Add(wallPiece.Item3);
                                     blockPicked = true;
@@ -3527,20 +3594,20 @@ namespace MapEditor
 
                             int cityCounter = 0;
                             do{
-                                string tens;
-                                string units;
+                                // string tens;
+                                // string units;
 
-                                if (cityCounter < 10)
-                                {
-                                    tens = "0";
-                                    units = cityCounter.ToString();
-                                }
-                                else{
-                                    tens = (cityCounter / 10).ToString();
-                                    units = (cityCounter % 10).ToString();
-                                }
+                                // if (cityCounter < 10)
+                                // {
+                                //     tens = "0";
+                                //     units = cityCounter.ToString();
+                                // }
+                                // else{
+                                //     tens = (cityCounter / 10).ToString();
+                                //     units = (cityCounter % 10).ToString();
+                                // }
 
-                                string countingRMB = string.Concat(partialRMB, tens, units, ".RMB.json");
+                                string countingRMB = string.Concat(partialRMB, cityCounter.ToString("00"), ".RMB.json");
 
                                 if (File.Exists(Path.Combine(MapEditor.testPath, "RMB", countingRMB)))
                                     blockVariants++;
@@ -3655,13 +3722,13 @@ namespace MapEditor
             if ((checkedBlock.Equals("DARK") ||
                  checkedBlock.Equals("FIGH") ||
                  checkedBlock.Equals("MAGE") ||
-                 checkedBlock.Equals("PALA") ||
+                 // checkedBlock.Equals("PALA") ||
                  checkedBlock.Equals("THIE")) &&
                  multipleCheck >= maxRareTolerated)
                 return false;
 
             if ((checkedBlock.Equals("BANK") ||
-                 checkedBlock.Equals("FILL") ||
+                 // checkedBlock.Equals("FILL") ||
                  checkedBlock.Equals("GRVE") ||
                  checkedBlock.Equals("MARK") ||
                  checkedBlock.Equals("TEMP")) &&
@@ -3966,6 +4033,74 @@ namespace MapEditor
             }
 
             return wallPosition;
+        }
+
+        protected List<(int, int, string)> DetermineSpecialBlocksSetting((int, int, int) townShape)
+        {
+            List<(int, int, string)> specialBlocks = new List<(int, int, string)>();
+            int x, y;
+            int fillIndex;
+            string fillBlock;
+            int blockVariants = 0;
+            bool anymoreRMB = true;
+
+            int fillCounter = 0;
+            do
+            {
+                // string tens;
+                // string units;
+
+                // if (cityCounter < 10)
+                // {
+                //     tens = "0";
+                //     units = cityCounter.ToString();
+                // }
+                // else{
+                //     tens = (cityCounter / 10).ToString();
+                //     units = (cityCounter % 10).ToString();
+                // }
+
+                string countingFILL = string.Concat("FILL", fillCounter.ToString("00"), ".RMB.json");
+
+                if (File.Exists(Path.Combine(MapEditor.testPath, "RMB", countingFILL)))
+                    blockVariants++;
+                else anymoreRMB = false;
+
+                fillCounter++;
+            }
+            while (anymoreRMB);
+
+            switch (townShape.Item3)
+            {
+                case (int)TownShapes.LShape:
+                    x = UnityEngine.Random.Range(0, 2);
+                    y = UnityEngine.Random.Range(0, 2);
+                    fillIndex = UnityEngine.Random.Range(0, fillCounter);
+                    specialBlocks.Add((x, y, string.Concat("FILL", fillIndex.ToString("00"), "AA.RMB.json")));
+                    break;
+
+                case (int)TownShapes.FourOnSix:
+                    do
+                    {
+                        x = UnityEngine.Random.Range(0, 2);
+                        y = UnityEngine.Random.Range(0, 2);
+                        fillIndex = UnityEngine.Random.Range(0, fillCounter);
+                        fillBlock = string.Concat("FILL", fillIndex.ToString("00"), "AA.RMB.json");
+
+                        if (!specialBlocks.Contains((x, y, "FILL*")))
+                        {
+                            specialBlocks.Add((x, y, fillBlock));
+                            Debug.Log("Block " + fillBlock + " added at position " + x + ", " + y);
+                        }
+                    }
+                    while (specialBlocks.Count < 2);
+                    break;
+
+                default:
+                    break;
+            }
+
+            return specialBlocks;
         }
 
         protected string GetRandom(string element)
